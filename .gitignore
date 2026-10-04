@@ -1,0 +1,6 @@
+# Pebble SDK build output
+build/
+.lock-waf*
+
+# npm dependencies (installed by pebble build)
+node_modules/

@@ -82,11 +82,6 @@ static GFont note_title_font(void) {
   return fonts_get_system_font(keys[s_font_size]);
 }
 
-static int16_t checklist_row_height(void) {
-  static const int16_t heights[FONT_SIZE_COUNT] = { 36, 44, 60 };
-  return heights[s_font_size];
-}
-
 // Gothic glyphs sit a few px below the text box top; offsets line text up with the checkbox.
 static int16_t checklist_text_nudge(void) {
   static const int16_t nudges[FONT_SIZE_COUNT] = { 3, 4, 6 };
@@ -209,13 +204,13 @@ static void text_window_update(void) {
   text_layer_set_text(s_title_layer, s_open_title);
   text_layer_set_text(s_body_layer, s_note_loading || s_note_status[0] ? s_note_status : s_body);
 
-  int16_t y = PBL_IF_ROUND_ELSE(18, 2);
-  int16_t title_h = s_open_title[0] ? text_layer_get_content_size(s_title_layer).h + 4 : 0;
+  int16_t y = PBL_IF_ROUND_ELSE(18, 0);
+  int16_t title_h = s_open_title[0] ? text_layer_get_content_size(s_title_layer).h : 0;
   layer_set_frame(text_layer_get_layer(s_title_layer), GRect(H_INSET, y, width, title_h));
   y += title_h;
 
   layer_set_frame(text_layer_get_layer(s_body_layer), GRect(H_INSET, y, width, 2000));
-  int16_t body_h = text_layer_get_content_size(s_body_layer).h + 6;
+  int16_t body_h = text_layer_get_content_size(s_body_layer).h + 4;
   layer_set_frame(text_layer_get_layer(s_body_layer), GRect(H_INSET, y, width, body_h));
   y += body_h + PBL_IF_ROUND_ELSE(40, 8);
 
@@ -263,8 +258,28 @@ static uint16_t checklist_num_rows(MenuLayer *menu, uint16_t section, void *data
   return checklist_has_items() ? s_item_count : 1;
 }
 
+#define CHECKBOX_SIZE    14
+#define CHECKLIST_ROW_PAD 6
+
+static int16_t checklist_text_x(const ChecklistItem *item) {
+  return H_INSET + 2 + item->indent * 12 + CHECKBOX_SIZE + 6;
+}
+
+// Height of the item's text box: one line, or two when it wraps (longer text is ellipsized).
+static int16_t checklist_text_height(const ChecklistItem *item, int16_t cell_w) {
+  GFont font = note_body_font();
+  GRect box = GRect(0, 0, cell_w - checklist_text_x(item) - H_INSET, 200);
+  int16_t one_line = graphics_text_layout_get_content_size("Ag", font, box, GTextOverflowModeWordWrap, GTextAlignmentLeft).h;
+  int16_t h = graphics_text_layout_get_content_size(item->text, font, box, GTextOverflowModeWordWrap, GTextAlignmentLeft).h;
+  return h > one_line + 2 ? 2 * one_line : one_line;
+}
+
 static int16_t checklist_cell_height(MenuLayer *menu, MenuIndex *index, void *data) {
-  return checklist_has_items() ? checklist_row_height() : 90;
+  if (!checklist_has_items()) return 90;
+  int16_t cell_w = layer_get_bounds(menu_layer_get_layer(menu)).size.w;
+  int16_t visible = checklist_text_height(&s_items[index->row], cell_w) - checklist_text_nudge();
+  int16_t h = visible + CHECKLIST_ROW_PAD;
+  return h < CHECKBOX_SIZE + CHECKLIST_ROW_PAD ? CHECKBOX_SIZE + CHECKLIST_ROW_PAD : h;
 }
 
 static int16_t checklist_header_height(MenuLayer *menu, uint16_t section, void *data) {
@@ -296,7 +311,7 @@ static void checklist_draw_row(GContext *ctx, const Layer *cell, MenuIndex *inde
 
   ChecklistItem *item = &s_items[index->row];
   int16_t x = H_INSET + 2 + item->indent * 12;
-  GRect box = GRect(x, (bounds.size.h - 14) / 2, 14, 14);
+  GRect box = GRect(x, (bounds.size.h - CHECKBOX_SIZE) / 2, CHECKBOX_SIZE, CHECKBOX_SIZE);
   graphics_context_set_stroke_color(ctx, fg);
   graphics_context_set_fill_color(ctx, fg);
   if (item->done) {
@@ -310,14 +325,19 @@ static void checklist_draw_row(GContext *ctx, const Layer *cell, MenuIndex *inde
     graphics_draw_round_rect(ctx, box, 2);
   }
 
-  int16_t text_x = x + 20;
-  GFont font = note_body_font();
-  GRect text_box = GRect(text_x, 0, bounds.size.w - text_x - H_INSET, bounds.size.h);
-  int16_t text_h = graphics_text_layout_get_content_size(item->text, font, text_box,
-                                                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft).h;
-  text_box.origin.y = (bounds.size.h - text_h) / 2 - checklist_text_nudge();
+  int16_t text_x = checklist_text_x(item);
+  int16_t text_h = checklist_text_height(item, bounds.size.w);
+  int16_t visible = text_h - checklist_text_nudge();
+  GRect text_box = GRect(text_x, (bounds.size.h - visible) / 2 - checklist_text_nudge(),
+                         bounds.size.w - text_x - H_INSET, text_h);
   graphics_context_set_text_color(ctx, highlighted ? GColorWhite : (item->done ? DONE_TEXT : GColorBlack));
-  graphics_draw_text(ctx, item->text, font, text_box, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, item->text, note_body_font(), text_box, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+#if defined(PBL_COLOR)
+  if (!highlighted) {
+    graphics_context_set_stroke_color(ctx, GColorLightGray);
+    graphics_draw_line(ctx, GPoint(x, bounds.size.h - 1), GPoint(bounds.size.w - H_INSET, bounds.size.h - 1));
+  }
+#endif
 }
 
 static void checklist_select(MenuLayer *menu, MenuIndex *index, void *data) {
@@ -382,36 +402,64 @@ static uint16_t list_num_rows(MenuLayer *menu, uint16_t section, void *data) {
   return s_note_count > 0 ? s_note_count : 1;
 }
 
+// Compact list rows: 18pt bold title, optional 14pt subtitle line.
+#define LIST_TITLE_ROW_H    26
+#define LIST_SUBTITLE_ROW_H 42
+#define LIST_PIN_SPACE      10
+
+static bool list_row_has_subtitle(MenuIndex *index) {
+  return index->section == NOTES_SECTION && s_notes[index->row].subtitle[0];
+}
+
 static int16_t list_cell_height(MenuLayer *menu, MenuIndex *index, void *data) {
   if (index->section == NOTES_SECTION && s_note_count == 0) return 90;
-#if defined(PBL_ROUND)
-  return menu_layer_is_index_selected(menu, index) ? 60 : 36;
-#else
-  bool has_subtitle = index->section != NOTES_SECTION || s_notes[index->row].subtitle[0];
-  return has_subtitle ? 50 : 36;
+  return list_row_has_subtitle(index) ? LIST_SUBTITLE_ROW_H : LIST_TITLE_ROW_H;
+}
+
+static void list_draw_compact(GContext *ctx, const Layer *cell, const char *title,
+                              const char *subtitle, bool pinned) {
+  GRect bounds = layer_get_bounds(cell);
+  bool highlighted = menu_cell_layer_is_highlighted(cell);
+  GTextAlignment align = PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
+  int16_t x = H_INSET + 2;
+  int16_t w = bounds.size.w - x - H_INSET - LIST_PIN_SPACE;
+
+  // Gothic fonts carry ~4px of space above the glyphs, hence the negative offsets.
+  graphics_context_set_text_color(ctx, highlighted ? GColorWhite : GColorBlack);
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(x, -2, w, 22), GTextOverflowModeTrailingEllipsis, align, NULL);
+  if (subtitle && subtitle[0]) {
+    graphics_context_set_text_color(ctx, highlighted ? GColorWhite : PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+    graphics_draw_text(ctx, subtitle, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(x, 20, w, 18), GTextOverflowModeTrailingEllipsis, align, NULL);
+  }
+  if (pinned) {
+    graphics_context_set_fill_color(ctx, highlighted ? GColorWhite : PBL_IF_COLOR_ELSE(GColorOrange, GColorBlack));
+    graphics_fill_circle(ctx, GPoint(bounds.size.w - H_INSET - 4, 12), 3);
+  }
+#if defined(PBL_COLOR)
+  if (!highlighted) {
+    graphics_context_set_stroke_color(ctx, GColorLightGray);
+    graphics_draw_line(ctx, GPoint(x, bounds.size.h - 1), GPoint(bounds.size.w - H_INSET, bounds.size.h - 1));
+  }
 #endif
 }
 
 static void list_draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *data) {
   if (index->section != NOTES_SECTION) {
-    menu_cell_basic_draw(ctx, cell, "+ New note", "Dictate", NULL);
+    list_draw_compact(ctx, cell, PBL_IF_ROUND_ELSE("+ New note", "+ New note (dictate)"), NULL, false);
     return;
   }
-  GRect bounds = layer_get_bounds(cell);
-  bool highlighted = menu_cell_layer_is_highlighted(cell);
   if (s_note_count == 0) {
-    graphics_context_set_text_color(ctx, highlighted ? GColorWhite : GColorBlack);
+    GRect bounds = layer_get_bounds(cell);
+    graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack);
     graphics_draw_text(ctx, s_list_status, fonts_get_system_font(FONT_KEY_GOTHIC_18),
                        GRect(H_INSET, 4, bounds.size.w - 2 * H_INSET, bounds.size.h - 8),
                        GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     return;
   }
   NoteRow *note = &s_notes[index->row];
-  menu_cell_basic_draw(ctx, cell, note->title, note->subtitle[0] ? note->subtitle : NULL, NULL);
-  if (note->flags & FLAG_PINNED) {
-    graphics_context_set_fill_color(ctx, highlighted ? GColorWhite : PBL_IF_COLOR_ELSE(GColorOrange, GColorBlack));
-    graphics_fill_circle(ctx, GPoint(bounds.size.w - PBL_IF_ROUND_ELSE(30, 8), 10), 3);
-  }
+  list_draw_compact(ctx, cell, note->title, note->subtitle, note->flags & FLAG_PINNED);
 }
 
 static void open_note(NoteRow *note) {
