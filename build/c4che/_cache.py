@@ -1,0 +1,27 @@
+BINDIR = '/usr/local/bin'
+BLOCK_MESSAGE_KEYS = []
+BUILD_TYPE = 'app'
+BUNDLE_NAME = 'kept-pebble.pbw'
+DEFINES = ['RELEASE']
+LIBDIR = '/usr/local/lib64'
+LIB_DIR = 'node_modules'
+LIB_JSON = [{'name': 'pebble-clay', 'version': '1.0.4', 'description': 'Pebble Config Framework', 'scripts': {'test-travis': './node_modules/.bin/gulp && ./node_modules/.bin/karma start ./test/karma.conf.js --single-run --browsers chromeTravisCI && ./node_modules/.bin/eslint ./', 'test-debug': '(export DEBUG=true && ./node_modules/.bin/gulp && ./node_modules/.bin/karma start ./test/karma.conf.js --no-single-run)', 'test': './node_modules/.bin/gulp && ./node_modules/.bin/karma start ./test/karma.conf.js --single-run', 'lint': './node_modules/.bin/eslint ./', 'build': 'gulp', 'dev': 'gulp dev', 'pebble-clean': 'rm -rf tmp src/js/index.js && pebble clean', 'pebble-publish': 'npm run pebble-clean && npm run build && pebble build && pebble package publish && npm run pebble-clean', 'pebble-build': 'npm run build && pebble build'}, 'repository': {'type': 'git', 'url': 'git+https://github.com/pebble/clay.git'}, 'keywords': ['pebble', 'config', 'configuration', 'pebble-package'], 'author': 'Pebble Technology', 'license': 'MIT', 'bugs': {'url': 'https://github.com/pebble/clay/issues'}, 'pebble': {'projectType': 'package', 'sdkVersion': '3', 'targetPlatforms': ['aplite', 'basalt', 'chalk', 'diorite', 'emery'], 'resources': {'media': []}, 'capabilities': ['configurable']}, 'homepage': 'https://github.com/pebble/clay#readme', 'devDependencies': {'autoprefixer': '^6.3.1', 'bourbon': '^4.2.6', 'browserify': '^13.0.0', 'browserify-istanbul': '^0.2.1', 'chai': '^3.4.1', 'deamdify': '^0.2.0', 'deepcopy': '^0.6.1', 'del': '^2.0.2', 'eslint': '^1.5.1', 'eslint-config-pebble': '^1.2.0', 'eslint-plugin-standard': '^1.3.1', 'gulp': '^3.9.0', 'gulp-autoprefixer': '^3.1.0', 'gulp-htmlmin': '^1.3.0', 'gulp-inline': '0.0.15', 'gulp-insert': '^0.5.0', 'gulp-sass': '^2.1.1', 'gulp-sourcemaps': '^1.6.0', 'gulp-uglify': '^1.5.2', 'joi': '^6.10.1', 'karma': '^0.13.19', 'karma-browserify': '^5.0.1', 'karma-chrome-launcher': '^0.2.2', 'karma-coverage': '^0.5.3', 'karma-mocha': '^0.2.1', 'karma-mocha-reporter': '^1.1.5', 'karma-source-map-support': '^1.1.0', 'karma-threshold-reporter': '^0.1.15', 'mocha': '^2.3.4', 'postcss': '^5.0.14', 'require-from-string': '^1.1.0', 'sassify': '^0.9.1', 'sinon': '^1.17.3', 'stringify': '^3.2.0', 'through': '^2.3.8', 'tosource': '^1.0.0', 'vinyl-buffer': '^1.0.0', 'vinyl-source-stream': '^1.1.0', 'watchify': '^3.7.0'}, 'dependencies': {}, 'path': 'node_modules/pebble-clay/dist', 'js_paths': ['node_modules/pebble-clay/dist/js/index.js']}]
+LIB_RESOURCES_JSON = {'pebble-clay': []}
+MESSAGE_KEYS = {'TYPE': 10000, 'CMD': 10001, 'NOTE_ID': 10002, 'INDEX': 10003, 'COUNT': 10004, 'TITLE': 10005, 'SUBTITLE': 10006, 'FLAGS': 10007, 'TEXT': 10008, 'DONE': 10009, 'INDENT': 10010}
+MESSAGE_KEYS_DEFINITION = '/home/daniel/Projekte/claude-test/kept-pebble/build/src/message_keys.auto.c'
+MESSAGE_KEYS_HEADER = '/home/daniel/Projekte/claude-test/kept-pebble/build/include/message_keys.auto.h'
+MESSAGE_KEYS_JSON = '/home/daniel/Projekte/claude-test/kept-pebble/build/js/message_keys.json'
+NODE_PATH = '/home/daniel/.local/share/pebble-sdk/SDKs/current/node_modules'
+PEBBLE_SDK_COMMON = '/home/daniel/.local/share/pebble-sdk/SDKs/current/sdk-core/pebble/common'
+PEBBLE_SDK_ROOT = '/home/daniel/.local/share/pebble-sdk/SDKs/current/sdk-core/pebble'
+PREFIX = '/usr/local'
+PROJECT_INFO = {'displayName': 'Kept', 'uuid': '23e67b92-56a7-4ace-b386-92855c9c794c', 'sdkVersion': '3', 'enableMultiJS': True, 'targetPlatforms': ['emery', 'basalt', 'diorite', 'chalk'], 'watchapp': {'watchface': False}, 'capabilities': ['configurable'], 'messageKeys': {'TYPE': 10000, 'CMD': 10001, 'NOTE_ID': 10002, 'INDEX': 10003, 'COUNT': 10004, 'TITLE': 10005, 'SUBTITLE': 10006, 'FLAGS': 10007, 'TEXT': 10008, 'DONE': 10009, 'INDENT': 10010}, 'resources': {'media': []}, 'name': 'kept-pebble', 'shortName': 'Kept', 'longName': 'Kept', 'versionLabel': '1.0.0', 'companyName': 'Daniel Leitschuh', 'appKeys': {'TYPE': 10000, 'CMD': 10001, 'NOTE_ID': 10002, 'INDEX': 10003, 'COUNT': 10004, 'TITLE': 10005, 'SUBTITLE': 10006, 'FLAGS': 10007, 'TEXT': 10008, 'DONE': 10009, 'INDENT': 10010}}
+REQUESTED_PLATFORMS = ['emery', 'basalt', 'diorite', 'chalk']
+RESOURCES_JSON = []
+SANDBOX = False
+SUPPORTED_PLATFORMS = ['basalt', 'aplite', 'diorite', 'chalk', 'flint', 'emery', 'gabbro']
+TARGET_PLATFORMS = ['emery', 'diorite', 'chalk', 'basalt']
+TIMESTAMP = 1791100480
+USE_GROUPS = True
+VERBOSE = 0
+WEBPACK = ['/home/daniel/.local/share/pebble-sdk/SDKs/current/node_modules/.bin/webpack']

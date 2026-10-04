@@ -1,0 +1,13 @@
+{
+    "CMD": 10001,
+    "COUNT": 10004,
+    "DONE": 10009,
+    "FLAGS": 10007,
+    "INDENT": 10010,
+    "INDEX": 10003,
+    "NOTE_ID": 10002,
+    "SUBTITLE": 10006,
+    "TEXT": 10008,
+    "TITLE": 10005,
+    "TYPE": 10000
+}

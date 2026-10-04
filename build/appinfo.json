@@ -1,0 +1,52 @@
+{
+    "displayName": "Kept",
+    "uuid": "23e67b92-56a7-4ace-b386-92855c9c794c",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+        "emery",
+        "basalt",
+        "diorite",
+        "chalk"
+    ],
+    "watchapp": {
+        "watchface": false
+    },
+    "capabilities": [
+        "configurable"
+    ],
+    "messageKeys": {
+        "TYPE": 10000,
+        "CMD": 10001,
+        "NOTE_ID": 10002,
+        "INDEX": 10003,
+        "COUNT": 10004,
+        "TITLE": 10005,
+        "SUBTITLE": 10006,
+        "FLAGS": 10007,
+        "TEXT": 10008,
+        "DONE": 10009,
+        "INDENT": 10010
+    },
+    "resources": {
+        "media": []
+    },
+    "name": "kept-pebble",
+    "shortName": "Kept",
+    "longName": "Kept",
+    "versionLabel": "1.0.0",
+    "companyName": "Daniel Leitschuh",
+    "appKeys": {
+        "TYPE": 10000,
+        "CMD": 10001,
+        "NOTE_ID": 10002,
+        "INDEX": 10003,
+        "COUNT": 10004,
+        "TITLE": 10005,
+        "SUBTITLE": 10006,
+        "FLAGS": 10007,
+        "TEXT": 10008,
+        "DONE": 10009,
+        "INDENT": 10010
+    }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "kept-pebble",
+  "author": "Daniel Leitschuh",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {
+    "pebble-clay": "^1.0.4"
+  },
+  "pebble": {
+    "displayName": "Kept",
+    "uuid": "23e67b92-56a7-4ace-b386-92855c9c794c",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery", "basalt", "diorite", "chalk"],
+    "watchapp": { "watchface": false },
+    "capabilities": ["configurable"],
+    "messageKeys": [
+      "TYPE",
+      "CMD",
+      "NOTE_ID",
+      "INDEX",
+      "COUNT",
+      "TITLE",
+      "SUBTITLE",
+      "FLAGS",
+      "TEXT",
+      "DONE",
+      "INDENT"
+    ],
+    "resources": { "media": [] }
+  }
+}
