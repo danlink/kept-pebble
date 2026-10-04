@@ -10,7 +10,7 @@ var TYPE = {
   NOTE_BEGIN: 4, BODY_CHUNK: 5, ITEM: 6, NOTE_END: 7,
   TOGGLED: 8, CREATED: 9, ERROR: 10, SETTINGS: 11
 };
-var CMD = { NONE: 0, LIST: 1, OPEN: 2, TOGGLE: 3, CREATE: 4, INSERT: 5 };
+var CMD = { NONE: 0, LIST: 1, OPEN: 2, TOGGLE: 3, CREATE: 4, INSERT: 5, DELETE: 6 };
 var DEFAULT_FONT_SIZE = 1;
 
 var SETTINGS_KEY = 'kept-settings';
@@ -233,6 +233,29 @@ function insertItem(noteId, afterIndex, text) {
   });
 }
 
+// Deletes the checklist item at index, then resends the note so indices match Kept again.
+function deleteItem(noteId, index) {
+  var item = openNote.id === noteId ? openNote.items[index] : null;
+  if (!item) {
+    sendError(CMD.DELETE, 'Reopen the note and try again.', noteId);
+    return;
+  }
+  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
+    var checkBoxes = kept.removedCheckBoxes(note, item.id);
+    if (!checkBoxes) {
+      sendError(CMD.DELETE, 'This item was changed elsewhere. Reopen the note.', noteId);
+      return;
+    }
+    keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes }, function () {
+      openNoteById(noteId);
+    }, function (message) {
+      sendError(CMD.DELETE, message, noteId);
+    });
+  }, function (message) {
+    sendError(CMD.DELETE, message, noteId);
+  });
+}
+
 function sendSettings() {
   var size = Number(loadSettings().fontSize);
   send({ TYPE: TYPE.SETTINGS, FONT_SIZE: size >= 0 && size <= 2 ? size : DEFAULT_FONT_SIZE });
@@ -267,6 +290,7 @@ Pebble.addEventListener('appmessage', function (e) {
     case CMD.TOGGLE: toggleItem(msg.NOTE_ID, msg.INDEX, !!msg.DONE); break;
     case CMD.CREATE: createNote(msg.TEXT); break;
     case CMD.INSERT: insertItem(msg.NOTE_ID, msg.INDEX, msg.TEXT); break;
+    case CMD.DELETE: deleteItem(msg.NOTE_ID, msg.INDEX); break;
     default: console.log('Unknown command: ' + JSON.stringify(msg));
   }
 });

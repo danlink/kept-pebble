@@ -195,6 +195,13 @@ function toggledCheckBoxes(note, itemId, done) {
   return found ? next : null;
 }
 
+// Returns the checkBoxes array without the item with itemId, or null if it no longer exists.
+function removedCheckBoxes(note, itemId) {
+  var boxes = note.checkBoxes || [];
+  var next = boxes.filter(function (item) { return String(item.id) !== String(itemId); });
+  return next.length === boxes.length ? null : next;
+}
+
 // Returns the checkBoxes array with a new unchecked item inserted directly after the
 // item with afterId (or at the top when afterId is null), or null if afterId is gone.
 // The new item copies the indent of the item it follows.
@@ -268,6 +275,7 @@ module.exports = {
   bodyChunks: bodyChunks,
   toggledCheckBoxes: toggledCheckBoxes,
   insertedCheckBoxes: insertedCheckBoxes,
+  removedCheckBoxes: removedCheckBoxes,
   createNotePayload: createNotePayload,
   errorMessage: errorMessage
 };

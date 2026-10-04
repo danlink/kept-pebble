@@ -20,6 +20,7 @@ It uses these Kept API routes, all of which a Kept external-access token is allo
 | Open note | `GET /api/notes/:id` |
 | Tick item | `GET /api/notes/:id` then `PATCH /api/notes/:id {checkBoxes}` (the note is re-read first so edits made elsewhere are kept) |
 | Add checklist item | `GET /api/notes/:id`, insert the item after the highlighted one, `PATCH /api/notes/:id {checkBoxes}`, then the note is sent to the watch again |
+| Delete checklist item | `GET /api/notes/:id`, remove the item, `PATCH /api/notes/:id {checkBoxes}`, then the note is sent to the watch again |
 | Dictate note | `POST /api/notes` |
 
 ## Setup
@@ -33,7 +34,7 @@ The Kept server must be reachable from the phone, either over public HTTPS or ov
 ## Controls
 
 - **List:** titled notes show only their title; untitled notes show a preview. Select opens a note. The list reloads from Kept when you come back from a note; hold Select to refresh it manually. "+ New note" starts dictation; it is only shown on watches with a microphone.
-- **Checklist:** Select ticks or unticks an item. The change shows at once and is rolled back if saving fails. Hold Select to dictate a new item: it goes directly below the highlighted item, with the same indent, and is highlighted once saved.
+- **Checklist:** Select ticks or unticks an item. The change shows at once and is rolled back if saving fails. Hold Select to open a menu: **Dictate new below** adds a dictated item directly below the highlighted one, with the same indent, and highlights it once saved; **Delete line** removes the highlighted item from Kept.
 - **Text note:** Up/Down scroll.
 
 ## Development

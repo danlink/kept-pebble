@@ -7,7 +7,7 @@ typedef enum {
   TYPE_TOGGLED, TYPE_CREATED, TYPE_ERROR, TYPE_SETTINGS
 } MessageType;
 
-typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE, CMD_INSERT } Command;
+typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE, CMD_INSERT, CMD_DELETE } Command;
 
 #define FLAG_PINNED    1
 #define FLAG_CHECKLIST 2
@@ -352,15 +352,66 @@ static void checklist_select(MenuLayer *menu, MenuIndex *index, void *data) {
   menu_layer_reload_data(menu);
 }
 
-// Long-press Select: dictate a new item that goes directly below the highlighted one.
+// ---- Checklist context menu (long-press Select) ---------------------------------
+
+typedef enum { ITEM_ACTION_NONE, ITEM_ACTION_DICTATE, ITEM_ACTION_DELETE } ItemAction;
+static ItemAction s_item_action;
+static int s_action_row;
+
+static void item_action_performed(ActionMenu *menu, const ActionMenuItem *action, void *context) {
+  s_item_action = (ItemAction)(uintptr_t)action_menu_item_get_action_data(action);
+}
+
+// Runs the chosen action once the menu has fully closed, so dictation can open its own window.
+static void item_action_menu_closed(ActionMenu *menu, const ActionMenuItem *performed, void *context) {
+  action_menu_hierarchy_destroy(action_menu_get_root_level(menu), NULL, NULL);
+  ItemAction action = s_item_action;
+  s_item_action = ITEM_ACTION_NONE;
+  if (!s_open_id) return;
+
+  switch (action) {
+#if defined(PBL_MICROPHONE)
+    case ITEM_ACTION_DICTATE:
+      s_insert_after = s_item_count > 0 ? s_action_row : -1;
+      start_dictation(DICTATE_ITEM);
+      break;
+#endif
+    case ITEM_ACTION_DELETE:
+      if (s_action_row < s_item_count && send_command(CMD_DELETE, s_open_id, s_action_row, 0, NULL)) {
+        s_select_after_load = s_action_row;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 static void checklist_long_select(MenuLayer *menu, MenuIndex *index, void *data) {
   if (s_note_loading || s_note_status[0]) return;
-#if defined(PBL_MICROPHONE)
-  s_insert_after = s_item_count > 0 ? index->row : -1;
-  start_dictation(DICTATE_ITEM);
-#else
-  toast("No microphone on this watch");
+  bool has_item = s_item_count > 0;
+#if !defined(PBL_MICROPHONE)
+  if (!has_item) {
+    toast("No microphone on this watch");
+    return;
+  }
 #endif
+  s_action_row = index->row;
+  s_item_action = ITEM_ACTION_NONE;
+
+  ActionMenuLevel *root = action_menu_level_create(2);
+#if defined(PBL_MICROPHONE)
+  action_menu_level_add_action(root, has_item ? "Dictate new below" : "Dictate new item",
+                               item_action_performed, (void *)ITEM_ACTION_DICTATE);
+#endif
+  if (has_item) {
+    action_menu_level_add_action(root, "Delete line", item_action_performed, (void *)ITEM_ACTION_DELETE);
+  }
+  action_menu_open(&(ActionMenuConfig) {
+    .root_level = root,
+    .colors = { .background = HIGHLIGHT_BG, .foreground = GColorWhite },
+    .align = ActionMenuAlignCenter,
+    .did_close = item_action_menu_closed,
+  });
 }
 
 static void checklist_window_load(Window *window) {
@@ -574,6 +625,7 @@ static void handle_error(DictionaryIterator *iter) {
       toast(text);
       return;
     case CMD_INSERT:
+    case CMD_DELETE:
       s_select_after_load = -1;
       toast(text);
       return;
@@ -656,8 +708,10 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       if (note_id != s_open_id) return;
       s_note_loading = false;
       note_view_update();
-      if (s_select_after_load >= 0 && s_checklist_menu && s_select_after_load < s_item_count) {
-        menu_layer_set_selected_index(s_checklist_menu, MenuIndex(0, s_select_after_load), MenuRowAlignCenter, true);
+      if (s_select_after_load >= 0 && s_checklist_menu && s_item_count > 0) {
+        // After a delete the row index may now be past the end; keep the highlight on the last item then.
+        int row = s_select_after_load < s_item_count ? s_select_after_load : s_item_count - 1;
+        menu_layer_set_selected_index(s_checklist_menu, MenuIndex(0, row), MenuRowAlignCenter, true);
         vibes_short_pulse();
       }
       s_select_after_load = -1;
