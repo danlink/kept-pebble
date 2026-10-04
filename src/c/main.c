@@ -4,10 +4,10 @@
 typedef enum {
   TYPE_LIST_BEGIN = 1, TYPE_LIST_ITEM, TYPE_LIST_END,
   TYPE_NOTE_BEGIN, TYPE_BODY_CHUNK, TYPE_ITEM, TYPE_NOTE_END,
-  TYPE_TOGGLED, TYPE_CREATED, TYPE_ERROR
+  TYPE_TOGGLED, TYPE_CREATED, TYPE_ERROR, TYPE_SETTINGS
 } MessageType;
 
-typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE } Command;
+typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE, CMD_INSERT } Command;
 
 #define FLAG_PINNED    1
 #define FLAG_CHECKLIST 2
@@ -21,6 +21,9 @@ typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE } Comman
 #define H_INSET PBL_IF_ROUND_ELSE(22, 4)
 #define HIGHLIGHT_BG PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack)
 #define DONE_TEXT PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
+
+#define PERSIST_FONT_SIZE 1
+#define FONT_SIZE_COUNT   3
 
 typedef struct {
   int32_t id;
@@ -40,6 +43,12 @@ typedef struct {
 
 static NoteRow s_notes[MAX_NOTES];
 static int s_note_count;
+// Rows received so far in a list update; the shown count only changes at LIST_END.
+static int s_incoming_count;
+// Set when a note is opened so the list reloads from Kept when you come back to it.
+static bool s_list_stale;
+// Note highlighted when a list update started, so the highlight can follow it.
+static int32_t s_keep_selected_id;
 static bool s_list_loading = true;
 static char s_list_status[STATUS_SIZE] = "Loading notes…";
 
@@ -57,6 +66,32 @@ static MenuLayer *s_list_menu, *s_checklist_menu;
 static ScrollLayer *s_scroll;
 static TextLayer *s_title_layer, *s_body_layer, *s_toast_layer;
 static AppTimer *s_toast_timer;
+
+// Note font size from the phone settings: 0 small, 1 medium, 2 large.
+static uint8_t s_font_size = 1;
+// Checklist row to highlight once the note is resent after inserting an item, or -1.
+static int s_select_after_load = -1;
+
+static GFont note_body_font(void) {
+  static const char *keys[FONT_SIZE_COUNT] = { FONT_KEY_GOTHIC_14, FONT_KEY_GOTHIC_18, FONT_KEY_GOTHIC_24 };
+  return fonts_get_system_font(keys[s_font_size]);
+}
+
+static GFont note_title_font(void) {
+  static const char *keys[FONT_SIZE_COUNT] = { FONT_KEY_GOTHIC_18_BOLD, FONT_KEY_GOTHIC_24_BOLD, FONT_KEY_GOTHIC_28_BOLD };
+  return fonts_get_system_font(keys[s_font_size]);
+}
+
+static int16_t checklist_row_height(void) {
+  static const int16_t heights[FONT_SIZE_COUNT] = { 36, 44, 60 };
+  return heights[s_font_size];
+}
+
+// Gothic glyphs sit a few px below the text box top; offsets line text up with the checkbox.
+static int16_t checklist_text_nudge(void) {
+  static const int16_t nudges[FONT_SIZE_COUNT] = { 3, 4, 6 };
+  return nudges[s_font_size];
+}
 static char s_toast_text[STATUS_SIZE];
 
 #if defined(PBL_MICROPHONE)
@@ -131,13 +166,24 @@ static void refresh_list(void) {
 // ---- Dictation ----------------------------------------------------------------
 
 #if defined(PBL_MICROPHONE)
+typedef enum { DICTATE_NOTE, DICTATE_ITEM } DictationMode;
+static DictationMode s_dictation_mode;
+static int s_insert_after;
+
 static void dictation_callback(DictationSession *session, DictationSessionStatus status,
                                char *transcription, void *context) {
   if (status != DictationSessionStatusSuccess) return;
-  if (send_command(CMD_CREATE, 0, 0, 0, transcription)) toast("Saving note…");
+  if (s_dictation_mode == DICTATE_NOTE) {
+    if (send_command(CMD_CREATE, 0, 0, 0, transcription)) toast("Saving note\u2026");
+    return;
+  }
+  if (!s_open_id) return;  // checklist was closed meanwhile
+  if (send_command(CMD_INSERT, s_open_id, s_insert_after, 0, transcription)) {
+    s_select_after_load = s_insert_after + 1;
+  }
 }
 
-static void start_dictation(void) {
+static void start_dictation(DictationMode mode) {
   if (!s_dictation) {
     s_dictation = dictation_session_create(512, dictation_callback, NULL);
     if (!s_dictation) {
@@ -146,6 +192,7 @@ static void start_dictation(void) {
     }
     dictation_session_enable_confirmation(s_dictation, true);
   }
+  s_dictation_mode = mode;
   dictation_session_start(s_dictation);
 }
 #endif
@@ -157,6 +204,8 @@ static void text_window_update(void) {
   GRect bounds = layer_get_bounds(window_get_root_layer(s_text_window));
   int16_t width = bounds.size.w - 2 * H_INSET;
 
+  text_layer_set_font(s_title_layer, note_title_font());
+  text_layer_set_font(s_body_layer, note_body_font());
   text_layer_set_text(s_title_layer, s_open_title);
   text_layer_set_text(s_body_layer, s_note_loading || s_note_status[0] ? s_note_status : s_body);
 
@@ -181,10 +230,8 @@ static void text_window_load(Window *window) {
   scroll_layer_set_shadow_hidden(s_scroll, true);
 
   s_title_layer = text_layer_create(GRect(H_INSET, 0, bounds.size.w - 2 * H_INSET, 2000));
-  text_layer_set_font(s_title_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_overflow_mode(s_title_layer, GTextOverflowModeWordWrap);
   s_body_layer = text_layer_create(GRect(H_INSET, 0, bounds.size.w - 2 * H_INSET, 2000));
-  text_layer_set_font(s_body_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_body_layer, GTextOverflowModeWordWrap);
 #if defined(PBL_ROUND)
   text_layer_set_text_alignment(s_title_layer, GTextAlignmentCenter);
@@ -217,7 +264,7 @@ static uint16_t checklist_num_rows(MenuLayer *menu, uint16_t section, void *data
 }
 
 static int16_t checklist_cell_height(MenuLayer *menu, MenuIndex *index, void *data) {
-  return checklist_has_items() ? 44 : 90;
+  return checklist_has_items() ? checklist_row_height() : 90;
 }
 
 static int16_t checklist_header_height(MenuLayer *menu, uint16_t section, void *data) {
@@ -264,12 +311,11 @@ static void checklist_draw_row(GContext *ctx, const Layer *cell, MenuIndex *inde
   }
 
   int16_t text_x = x + 20;
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  GFont font = note_body_font();
   GRect text_box = GRect(text_x, 0, bounds.size.w - text_x - H_INSET, bounds.size.h);
   int16_t text_h = graphics_text_layout_get_content_size(item->text, font, text_box,
                                                          GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft).h;
-  // Gothic glyphs sit ~4px below the box top; nudge so the text lines up with the checkbox.
-  text_box.origin.y = (bounds.size.h - text_h) / 2 - 4;
+  text_box.origin.y = (bounds.size.h - text_h) / 2 - checklist_text_nudge();
   graphics_context_set_text_color(ctx, highlighted ? GColorWhite : (item->done ? DONE_TEXT : GColorBlack));
   graphics_draw_text(ctx, item->text, font, text_box, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
@@ -286,6 +332,17 @@ static void checklist_select(MenuLayer *menu, MenuIndex *index, void *data) {
   menu_layer_reload_data(menu);
 }
 
+// Long-press Select: dictate a new item that goes directly below the highlighted one.
+static void checklist_long_select(MenuLayer *menu, MenuIndex *index, void *data) {
+  if (s_note_loading || s_note_status[0]) return;
+#if defined(PBL_MICROPHONE)
+  s_insert_after = s_item_count > 0 ? index->row : -1;
+  start_dictation(DICTATE_ITEM);
+#else
+  toast("No microphone on this watch");
+#endif
+}
+
 static void checklist_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   s_checklist_menu = menu_layer_create(layer_get_bounds(root));
@@ -297,6 +354,7 @@ static void checklist_window_load(Window *window) {
     .draw_header = checklist_draw_header,
     .draw_row = checklist_draw_row,
     .select_click = checklist_select,
+    .select_long_click = checklist_long_select,
   });
   menu_layer_set_click_config_onto_window(s_checklist_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_checklist_menu));
@@ -326,7 +384,12 @@ static uint16_t list_num_rows(MenuLayer *menu, uint16_t section, void *data) {
 
 static int16_t list_cell_height(MenuLayer *menu, MenuIndex *index, void *data) {
   if (index->section == NOTES_SECTION && s_note_count == 0) return 90;
-  return PBL_IF_ROUND_ELSE(menu_layer_is_index_selected(menu, index) ? 60 : 36, 50);
+#if defined(PBL_ROUND)
+  return menu_layer_is_index_selected(menu, index) ? 60 : 36;
+#else
+  bool has_subtitle = index->section != NOTES_SECTION || s_notes[index->row].subtitle[0];
+  return has_subtitle ? 50 : 36;
+#endif
 }
 
 static void list_draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *data) {
@@ -360,13 +423,14 @@ static void open_note(NoteRow *note) {
   s_item_count = 0;
   snprintf(s_open_title, sizeof(s_open_title), "%s", note->title);
   if (!send_command(CMD_OPEN, note->id, 0, 0, NULL)) return;
+  s_list_stale = true;
   window_stack_push((note->flags & FLAG_CHECKLIST) ? s_checklist_window : s_text_window, true);
 }
 
 static void list_select(MenuLayer *menu, MenuIndex *index, void *data) {
   if (index->section != NOTES_SECTION) {
 #if defined(PBL_MICROPHONE)
-    start_dictation();
+    start_dictation(DICTATE_NOTE);
 #endif
     return;
   }
@@ -400,6 +464,12 @@ static void list_window_load(Window *window) {
   // Start on the first note rather than on the "New note" action.
   menu_layer_set_selected_index(s_list_menu, MenuIndex(NOTES_SECTION, 0), MenuRowAlignCenter, false);
 #endif
+}
+
+static void list_window_appear(Window *window) {
+  if (!s_list_stale) return;
+  s_list_stale = false;
+  refresh_list();
 }
 
 static void list_window_unload(Window *window) {
@@ -455,6 +525,10 @@ static void handle_error(DictionaryIterator *iter) {
     case CMD_CREATE:
       toast(text);
       return;
+    case CMD_INSERT:
+      s_select_after_load = -1;
+      toast(text);
+      return;
     default:
       s_list_loading = false;
       if (s_note_count == 0) {
@@ -475,7 +549,14 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   switch (type) {
     case TYPE_LIST_BEGIN:
       s_list_loading = true;
-      s_note_count = 0;
+      s_incoming_count = 0;
+      s_keep_selected_id = 0;
+      if (s_list_menu && s_note_count > 0) {
+        MenuIndex selected = menu_layer_get_selected_index(s_list_menu);
+        if (selected.section == NOTES_SECTION && selected.row < s_note_count) {
+          s_keep_selected_id = s_notes[selected.row].id;
+        }
+      }
       break;
     case TYPE_LIST_ITEM:
       if (index >= 0 && index < MAX_NOTES) {
@@ -484,13 +565,22 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         note->flags = tuple_int(iter, MESSAGE_KEY_FLAGS);
         snprintf(note->title, sizeof(note->title), "%s", tuple_str(iter, MESSAGE_KEY_TITLE));
         snprintf(note->subtitle, sizeof(note->subtitle), "%s", tuple_str(iter, MESSAGE_KEY_SUBTITLE));
-        if (index >= s_note_count) s_note_count = index + 1;
+        if (index >= s_incoming_count) s_incoming_count = index + 1;
       }
       break;
     case TYPE_LIST_END:
       s_list_loading = false;
+      s_note_count = s_incoming_count;
       if (s_note_count == 0) snprintf(s_list_status, sizeof(s_list_status), "No notes yet.\nHold Select to refresh.");
-      if (s_list_menu) menu_layer_reload_data(s_list_menu);
+      if (s_list_menu) {
+        menu_layer_reload_data(s_list_menu);
+        for (int i = 0; s_keep_selected_id && i < s_note_count; i++) {
+          if (s_notes[i].id == s_keep_selected_id) {
+            menu_layer_set_selected_index(s_list_menu, MenuIndex(NOTES_SECTION, i), MenuRowAlignCenter, false);
+            break;
+          }
+        }
+      }
       break;
 
     case TYPE_NOTE_BEGIN:
@@ -518,6 +608,11 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       if (note_id != s_open_id) return;
       s_note_loading = false;
       note_view_update();
+      if (s_select_after_load >= 0 && s_checklist_menu && s_select_after_load < s_item_count) {
+        menu_layer_set_selected_index(s_checklist_menu, MenuIndex(0, s_select_after_load), MenuRowAlignCenter, true);
+        vibes_short_pulse();
+      }
+      s_select_after_load = -1;
       break;
 
     case TYPE_TOGGLED:
@@ -526,6 +621,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       s_items[index].pending = false;
       note_view_update();
       break;
+    case TYPE_SETTINGS: {
+      int32_t size = tuple_int(iter, MESSAGE_KEY_FONT_SIZE);
+      if (size >= 0 && size < FONT_SIZE_COUNT && size != s_font_size) {
+        s_font_size = size;
+        persist_write_int(PERSIST_FONT_SIZE, size);
+        note_view_update();
+      }
+      break;
+    }
     case TYPE_CREATED:
       vibes_short_pulse();
       toast("Note saved");
@@ -550,7 +654,12 @@ static Window *make_window(WindowHandlers handlers) {
 }
 
 static void init(void) {
-  s_list_window = make_window((WindowHandlers) { .load = list_window_load, .unload = list_window_unload });
+  if (persist_exists(PERSIST_FONT_SIZE)) {
+    int32_t size = persist_read_int(PERSIST_FONT_SIZE);
+    if (size >= 0 && size < FONT_SIZE_COUNT) s_font_size = size;
+  }
+  s_list_window = make_window((WindowHandlers) {
+    .load = list_window_load, .appear = list_window_appear, .unload = list_window_unload });
   s_text_window = make_window((WindowHandlers) { .load = text_window_load, .unload = text_window_unload });
   s_checklist_window = make_window((WindowHandlers) { .load = checklist_window_load, .unload = checklist_window_unload });
   s_toast_window = make_window((WindowHandlers) { .load = toast_window_load, .unload = toast_window_unload });

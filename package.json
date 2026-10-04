@@ -26,7 +26,8 @@
       "FLAGS",
       "TEXT",
       "DONE",
-      "INDENT"
+      "INDENT",
+      "FONT_SIZE"
     ],
     "resources": { "media": [] }
   }

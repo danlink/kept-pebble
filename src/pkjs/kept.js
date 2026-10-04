@@ -129,14 +129,13 @@ function noteRow(note) {
   var items = note.checkBoxes || [];
   var title = oneLine(note.noteTitle);
   var preview;
-  if (note.isCbox && items.length) {
+  if (title) {
+    // Titled notes show only their title; content previews are for untitled notes.
+    preview = '';
+  } else if (note.isCbox && items.length) {
     var summary = checklistSummary(items);
-    if (title) {
-      preview = summary.firstOpen ? summary.count + ' · ' + summary.firstOpen : summary.count;
-    } else {
-      title = summary.firstOpen || 'Checklist';
-      preview = summary.count;
-    }
+    title = summary.firstOpen || 'Checklist';
+    preview = summary.count;
   } else {
     preview = oneLine(note.previewText || htmlToText(note.noteBody));
     if (!title) {
@@ -196,6 +195,32 @@ function toggledCheckBoxes(note, itemId, done) {
   return found ? next : null;
 }
 
+// Returns the checkBoxes array with a new unchecked item inserted directly after the
+// item with afterId (or at the top when afterId is null), or null if afterId is gone.
+// The new item copies the indent of the item it follows.
+function insertedCheckBoxes(note, afterId, text, now) {
+  var boxes = (note.checkBoxes || []).slice();
+  var position = 0;
+  var indent = 0;
+  if (afterId !== null && afterId !== undefined) {
+    position = -1;
+    for (var i = 0; i < boxes.length; i++) {
+      if (String(boxes[i].id) === String(afterId)) {
+        position = i + 1;
+        indent = Number(boxes[i].indentLevel) || 0;
+        break;
+      }
+    }
+    if (position < 0) return null;
+  }
+  var id = now;
+  var taken = {};
+  boxes.forEach(function (item) { taken[String(item.id)] = true; });
+  while (taken[String(id)]) id++;
+  boxes.splice(position, 0, { id: id, data: escapeHtml(oneLine(text)), done: false, indentLevel: indent });
+  return boxes;
+}
+
 function escapeHtml(text) {
   return String(text || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -242,6 +267,7 @@ module.exports = {
   checklistItems: checklistItems,
   bodyChunks: bodyChunks,
   toggledCheckBoxes: toggledCheckBoxes,
+  insertedCheckBoxes: insertedCheckBoxes,
   createNotePayload: createNotePayload,
   errorMessage: errorMessage
 };

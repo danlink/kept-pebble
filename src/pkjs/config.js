@@ -26,7 +26,18 @@ module.exports = [
     type: 'section',
     items: [
       { type: 'heading', defaultValue: 'Display' },
-      { type: 'slider', messageKey: 'MAX_NOTES', label: 'Notes to show', defaultValue: 30, min: 5, max: 30, step: 5 }
+      { type: 'slider', messageKey: 'MAX_NOTES', label: 'Notes to show', defaultValue: 30, min: 5, max: 30, step: 5 },
+      {
+        type: 'select',
+        messageKey: 'FONT_SIZE',
+        label: 'Note font size',
+        defaultValue: '1',
+        options: [
+          { label: 'Small', value: '0' },
+          { label: 'Medium', value: '1' },
+          { label: 'Large', value: '2' }
+        ]
+      }
     ]
   },
   { type: 'submit', defaultValue: 'Save' }

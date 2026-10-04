@@ -8,9 +8,10 @@ var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 var TYPE = {
   LIST_BEGIN: 1, LIST_ITEM: 2, LIST_END: 3,
   NOTE_BEGIN: 4, BODY_CHUNK: 5, ITEM: 6, NOTE_END: 7,
-  TOGGLED: 8, CREATED: 9, ERROR: 10
+  TOGGLED: 8, CREATED: 9, ERROR: 10, SETTINGS: 11
 };
-var CMD = { NONE: 0, LIST: 1, OPEN: 2, TOGGLE: 3, CREATE: 4 };
+var CMD = { NONE: 0, LIST: 1, OPEN: 2, TOGGLE: 3, CREATE: 4, INSERT: 5 };
+var DEFAULT_FONT_SIZE = 1;
 
 var SETTINGS_KEY = 'kept-settings';
 var REQUEST_TIMEOUT_MS = 10000;
@@ -106,7 +107,10 @@ function keptRequest(method, path, body, onSuccess, onError) {
     if (xhr.status >= 200 && xhr.status < 300) onSuccess(payload);
     else onError(kept.errorMessage(xhr.status, payload));
   };
-  xhr.open(method, settings.url + path, true);
+  // Unique query parameter so no phone-side HTTP cache can serve a stale note.
+  var url = settings.url + path;
+  if (method === 'GET') url += (path.indexOf('?') < 0 ? '?' : '&') + '_=' + Date.now();
+  xhr.open(method, url, true);
   xhr.setRequestHeader('Authorization', 'Bearer ' + settings.token);
   xhr.setRequestHeader('Accept', 'application/json');
   if (body !== undefined) xhr.setRequestHeader('Content-Type', 'application/json');
@@ -197,6 +201,43 @@ function toggleItem(noteId, index, done) {
   });
 }
 
+// Inserts a dictated checklist item below the item at afterIndex (-1 = top), then
+// resends the note so the watch's item indices match Kept again.
+function insertItem(noteId, afterIndex, text) {
+  if (openNote.id !== noteId) {
+    sendError(CMD.INSERT, 'Reopen the note and try again.', noteId);
+    return;
+  }
+  if (!text || !String(text).replace(/\s+/g, '')) {
+    sendError(CMD.INSERT, 'Nothing to add.', noteId);
+    return;
+  }
+  var after = afterIndex >= 0 ? openNote.items[afterIndex] : null;
+  if (afterIndex >= 0 && !after) {
+    sendError(CMD.INSERT, 'Reopen the note and try again.', noteId);
+    return;
+  }
+  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
+    var checkBoxes = kept.insertedCheckBoxes(note, after ? after.id : null, text, Date.now());
+    if (!checkBoxes) {
+      sendError(CMD.INSERT, 'This item was changed elsewhere. Reopen the note.', noteId);
+      return;
+    }
+    keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes, isCbox: true }, function () {
+      openNoteById(noteId);
+    }, function (message) {
+      sendError(CMD.INSERT, message, noteId);
+    });
+  }, function (message) {
+    sendError(CMD.INSERT, message, noteId);
+  });
+}
+
+function sendSettings() {
+  var size = Number(loadSettings().fontSize);
+  send({ TYPE: TYPE.SETTINGS, FONT_SIZE: size >= 0 && size <= 2 ? size : DEFAULT_FONT_SIZE });
+}
+
 function createNote(text) {
   if (!text || !String(text).replace(/\s+/g, '')) {
     sendError(CMD.CREATE, 'Nothing to save.');
@@ -214,6 +255,7 @@ function createNote(text) {
 
 Pebble.addEventListener('ready', function () {
   console.log('Kept pkjs ready');
+  sendSettings();
   listNotes();
 });
 
@@ -224,6 +266,7 @@ Pebble.addEventListener('appmessage', function (e) {
     case CMD.OPEN: openNoteById(msg.NOTE_ID); break;
     case CMD.TOGGLE: toggleItem(msg.NOTE_ID, msg.INDEX, !!msg.DONE); break;
     case CMD.CREATE: createNote(msg.TEXT); break;
+    case CMD.INSERT: insertItem(msg.NOTE_ID, msg.INDEX, msg.TEXT); break;
     default: console.log('Unknown command: ' + JSON.stringify(msg));
   }
 });
@@ -240,7 +283,9 @@ Pebble.addEventListener('webviewclosed', function (e) {
   saveSettings({
     url: kept.normalizeBaseUrl(settingValue(values.KEPT_URL)),
     token: token || previous.token || '',
-    maxNotes: Number(settingValue(values.MAX_NOTES)) || kept.LIMITS.maxNotes
+    maxNotes: Number(settingValue(values.MAX_NOTES)) || kept.LIMITS.maxNotes,
+    fontSize: Number(settingValue(values.FONT_SIZE))
   });
+  sendSettings();
   listNotes();
 });

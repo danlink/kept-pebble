@@ -19,20 +19,21 @@ It uses these Kept API routes, all of which a Kept external-access token is allo
 | List notes | `GET /api/notes?view=card&limit=80` (paged; archived, trashed and locked notes are hidden; pinned notes come first) |
 | Open note | `GET /api/notes/:id` |
 | Tick item | `GET /api/notes/:id` then `PATCH /api/notes/:id {checkBoxes}` (the note is re-read first so edits made elsewhere are kept) |
+| Add checklist item | `GET /api/notes/:id`, insert the item after the highlighted one, `PATCH /api/notes/:id {checkBoxes}`, then the note is sent to the watch again |
 | Dictate note | `POST /api/notes` |
 
 ## Setup
 
 1. In Kept, open **Settings → External Access**, enable **Local MCP access** and copy the `kept_mcp_…` token.
 2. Install `build/kept-pebble.pbw` on your watch: `pebble install --phone <ip>`, or open the file with the Pebble app.
-3. In the Pebble phone app, open the Kept app's settings and enter your server URL (for example `https://kept.example.com`) and the token.
+3. In the Pebble phone app, open the Kept app's settings and enter your server URL (for example `https://kept.example.com`) and the token. You can also set how many notes to show and the note font size (Small, Medium or Large).
 
 The Kept server must be reachable from the phone, either over public HTTPS or over Tailscale/VPN. The token stays on the phone and is never sent to the watch.
 
 ## Controls
 
-- **List:** Select opens a note. Hold Select to refresh. "+ New note" starts dictation; it is only shown on watches with a microphone.
-- **Checklist:** Select ticks or unticks an item. The change shows at once and is rolled back if saving fails.
+- **List:** titled notes show only their title; untitled notes show a preview. Select opens a note. The list reloads from Kept when you come back from a note; hold Select to refresh it manually. "+ New note" starts dictation; it is only shown on watches with a microphone.
+- **Checklist:** Select ticks or unticks an item. The change shows at once and is rolled back if saving fails. Hold Select to dictate a new item: it goes directly below the highlighted item, with the same indent, and is highlighted once saved.
 - **Text note:** Up/Down scroll.
 
 ## Development
