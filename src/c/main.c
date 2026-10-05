@@ -771,6 +771,10 @@ static void init(void) {
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(app_message_inbox_size_maximum(), 1024);
 
+  // Opt in to the system touch bridge so swipes/taps scroll the notes list, checklists and
+  // text notes on touchscreen watches. A no-op macro on platforms without touch.
+  (void)app_touch_navigation_enable(true);
+
   window_stack_push(s_list_window, true);
 }
 
