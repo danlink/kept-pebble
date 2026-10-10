@@ -40,5 +40,36 @@ module.exports = [
       }
     ]
   },
+  {
+    type: 'section',
+    items: [
+      { type: 'heading', defaultValue: 'New items' },
+      {
+        type: 'text',
+        defaultValue: 'While a checklist is open on the watch, the phone checks it for items added elsewhere, for example by someone sharing your shopping list.'
+      },
+      { type: 'toggle', messageKey: 'NEW_ITEM_ALERT', label: 'Vibrate on new items', defaultValue: true },
+      {
+        type: 'input',
+        messageKey: 'NEW_ITEM_PATTERN',
+        label: 'Vibration pattern',
+        description: '<b>.</b> short, <b>-</b> long, space for a pause. Example: <b>.-</b>',
+        defaultValue: '.-',
+        attributes: { placeholder: '.-', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }
+      },
+      {
+        type: 'select',
+        messageKey: 'POLL_SECONDS',
+        label: 'Check every',
+        defaultValue: '30',
+        options: [
+          { label: '10 seconds', value: '10' },
+          { label: '30 seconds', value: '30' },
+          { label: '1 minute', value: '60' },
+          { label: '2 minutes', value: '120' }
+        ]
+      }
+    ]
+  },
   { type: 'submit', defaultValue: 'Save' }
 ];

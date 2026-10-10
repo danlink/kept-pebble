@@ -4,7 +4,7 @@
 typedef enum {
   TYPE_LIST_BEGIN = 1, TYPE_LIST_ITEM, TYPE_LIST_END,
   TYPE_NOTE_BEGIN, TYPE_BODY_CHUNK, TYPE_ITEM, TYPE_NOTE_END,
-  TYPE_TOGGLED, TYPE_CREATED, TYPE_ERROR, TYPE_SETTINGS
+  TYPE_TOGGLED, TYPE_CREATED, TYPE_ERROR, TYPE_SETTINGS, TYPE_NEW_ITEMS
 } MessageType;
 
 typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE, CMD_INSERT, CMD_DELETE } Command;
@@ -135,6 +135,37 @@ static void toast(const char *text) {
   }
   window_stack_push(s_toast_window, true);
   s_toast_timer = app_timer_register(TOAST_MS, toast_hide, NULL);
+}
+
+// ---- Vibration pattern --------------------------------------------------------
+
+#define VIBE_SHORT_MS 120
+#define VIBE_LONG_MS  400
+#define VIBE_GAP_MS   150
+#define VIBE_PAUSE_MS 400
+#define VIBE_MAX_SEGMENTS 48
+
+// Plays a pattern like ".-": '.' short, '-' long, ' ' an extra pause.
+static void vibrate_pattern(const char *pattern) {
+  static uint32_t segments[VIBE_MAX_SEGMENTS];
+  int count = 0;
+  uint32_t pause = 0;
+  for (const char *c = pattern; *c; c++) {
+    if (*c == ' ') {
+      pause += VIBE_PAUSE_MS;
+      continue;
+    }
+    if (*c != '.' && *c != '-') continue;
+    if (count > 0) {
+      if (count + 2 > VIBE_MAX_SEGMENTS) break;
+      segments[count++] = VIBE_GAP_MS + pause;
+    }
+    segments[count++] = *c == '.' ? VIBE_SHORT_MS : VIBE_LONG_MS;
+    pause = 0;
+  }
+  if (count == 0) return;
+  vibes_cancel();
+  vibes_enqueue_custom_pattern((VibePattern) { .durations = segments, .num_segments = count });
 }
 
 // ---- Outgoing commands --------------------------------------------------------
@@ -787,6 +818,12 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       break;
     case TYPE_ERROR:
       handle_error(iter);
+      break;
+    case TYPE_NEW_ITEMS:
+      // Someone added items to the open checklist; the phone has already resent it.
+      if (note_id != s_open_id || !s_checklist_menu) return;
+      vibrate_pattern(tuple_str(iter, MESSAGE_KEY_TEXT));
+      light_enable_interaction();
       break;
     case TYPE_TOGGLED:
       break;  // no longer sent; the watch applies toggles itself

@@ -22,12 +22,13 @@ It uses these Kept API routes, all of which a Kept external-access token is allo
 | Add checklist item | `GET /api/notes/:id`, insert the item after the highlighted one (or at the end of the open items when the highlighted one is checked), `PATCH /api/notes/:id {checkBoxes}`, then the note is sent to the watch again |
 | Delete checklist item | `GET /api/notes/:id`, remove the item, `PATCH /api/notes/:id {checkBoxes}`, then the note is sent to the watch again |
 | Dictate note | `POST /api/notes` |
+| Watch for new items | `GET /api/notes/:id` every 10 s to 2 min while a checklist is open on the watch |
 
 ## Setup
 
 1. In Kept, open **Settings → External Access**, enable **Local MCP access** and copy the `kept_mcp_…` token.
 2. Install `build/kept-pebble.pbw` on your watch: `pebble install --phone <ip>`, or open the file with the Pebble app.
-3. In the Pebble phone app, open the Kept app's settings and enter your server URL (for example `https://kept.example.com`) and the token. You can also set how many notes to show and the note font size (Small, Medium or Large).
+3. In the Pebble phone app, open the Kept app's settings and enter your server URL (for example `https://kept.example.com`) and the token. You can also set how many notes to show, the note font size (Small, Medium or Large), and the new-item vibration (see below).
 
 The Kept server must be reachable from the phone, either over public HTTPS or over Tailscale/VPN. The token stays on the phone and is never sent to the watch.
 
@@ -36,6 +37,14 @@ The Kept server must be reachable from the phone, either over public HTTPS or ov
 - **List:** titled notes show only their title; untitled notes show a preview. Select opens a note. The list reloads from Kept when you come back from a note; hold Select to refresh it manually. "+ New note" starts dictation; it is only shown on watches with a microphone.
 - **Checklist:** open items come first; checked items follow in an inverted block, the most recently checked on top. Select ticks or unticks an item together with its indented sub-items: a ticked item moves to the top of the checked block, an unticked one to the end of the open items, and the highlight stays in place on the next item. The change shows at once; if saving fails, the note is reloaded from Kept. Hold Select to open a menu: **Dictate new below** adds a dictated item directly below the highlighted one, with the same indent, and highlights it once saved; **Delete line** removes the highlighted item from Kept.
 - **Text note:** Up/Down scroll.
+
+## New-item vibration
+
+While a checklist is open on the watch, the phone re-reads it from Kept (every 30 seconds by default). When someone else adds an item, for example to a shared shopping list, the list on the watch updates and the watch plays a vibration pattern and turns on the backlight. Items you dictate on the watch don't trigger it. Other changes made elsewhere, such as ticks or edits, update the list silently.
+
+In the settings you can turn this off, set the pattern (`.` short, `-` long, a space for a pause; default `.-`) and choose how often to check: 10 s, 30 s, 1 min or 2 min.
+
+The check only runs while the Kept app is open on that checklist: Pebble stops the phone side of an app when you leave it. Kept's realtime socket only accepts browser sessions, not the API token, so the phone has to poll.
 
 ## Development
 

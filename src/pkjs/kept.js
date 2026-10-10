@@ -227,8 +227,36 @@ function sameItems(a, b) {
   if (a.length !== b.length) return false;
   for (var i = 0; i < a.length; i++) {
     if (String(a[i].id) !== String(b[i].id) || a[i].done !== b[i].done || a[i].indent !== b[i].indent) return false;
+    if (a[i].text !== undefined && b[i].text !== undefined && a[i].text !== b[i].text) return false;
   }
   return true;
+}
+
+// Ids of the checklist items that have text, as a set. Empty rows are left out, so a row
+// someone has started but not yet filled in counts as new once it gets its text.
+function filledItemIds(note) {
+  var ids = {};
+  (note.checkBoxes || []).forEach(function (item) {
+    if (oneLine(htmlToText(item.data))) ids[String(item.id)] = true;
+  });
+  return ids;
+}
+
+// Number of items with text in note whose ids are not in knownIds.
+function countNewItems(note, knownIds) {
+  var ids = filledItemIds(note);
+  var count = 0;
+  for (var id in ids) if (!knownIds[id]) count++;
+  return count;
+}
+
+// Keeps only . - and spaces (long dashes from phone autocorrect count as -), at most 24;
+// falls back to .- when nothing is left.
+function vibePattern(text) {
+  var pattern = String(text || '')
+    .replace(/[_\u2013\u2014\u2212]/g, '-').replace(/[\u00b7\u2022]/g, '.')
+    .replace(/[^.\- ]/g, '').replace(/\s+/g, ' ').replace(/^ +| +$/g, '');
+  return pattern.slice(0, 24) || '.-';
 }
 
 function bodyChunks(note) {
@@ -281,7 +309,7 @@ function insertedCheckBoxes(note, afterId, text, now) {
   while (taken[String(id)]) id++;
   var box = { id: id, data: escapeHtml(oneLine(text)), done: false, indentLevel: indent };
   rows.splice(position, 0, { id: id, done: false, indent: indent, box: box });
-  return { checkBoxes: storedBoxes(rows), index: position };
+  return { checkBoxes: storedBoxes(rows), index: position, id: id };
 }
 
 function escapeHtml(text) {
@@ -330,6 +358,9 @@ module.exports = {
   checklistItems: checklistItems,
   toggledRows: toggledRows,
   sameItems: sameItems,
+  filledItemIds: filledItemIds,
+  countNewItems: countNewItems,
+  vibePattern: vibePattern,
   bodyChunks: bodyChunks,
   toggledCheckBoxes: toggledCheckBoxes,
   insertedCheckBoxes: insertedCheckBoxes,

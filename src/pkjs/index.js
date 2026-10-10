@@ -8,7 +8,7 @@ var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 var TYPE = {
   LIST_BEGIN: 1, LIST_ITEM: 2, LIST_END: 3,
   NOTE_BEGIN: 4, BODY_CHUNK: 5, ITEM: 6, NOTE_END: 7,
-  TOGGLED: 8, CREATED: 9, ERROR: 10, SETTINGS: 11
+  TOGGLED: 8, CREATED: 9, ERROR: 10, SETTINGS: 11, NEW_ITEMS: 12
 };
 var CMD = { NONE: 0, LIST: 1, OPEN: 2, TOGGLE: 3, CREATE: 4, INSERT: 5, DELETE: 6 };
 var DEFAULT_FONT_SIZE = 1;
@@ -16,9 +16,11 @@ var DEFAULT_FONT_SIZE = 1;
 var SETTINGS_KEY = 'kept-settings';
 var REQUEST_TIMEOUT_MS = 10000;
 var MAX_LIST_PAGES = 5;
+var DEFAULT_POLL_SECONDS = 30;
 
-// Checklist rows of the note open on the watch, in the watch's order; the watch sends row indices.
-var openNote = { id: 0, items: [] };
+// The note open on the watch. items are its checklist rows in the watch's order (the watch
+// sends row indices); knownIds are the filled item ids last sent, to spot items added elsewhere.
+var openNote = { id: 0, items: [], knownIds: null };
 
 // ---- Settings ---------------------------------------------------------------
 
@@ -119,6 +121,51 @@ function keptRequest(method, path, body, onSuccess, onError) {
 
 // ---- Commands ---------------------------------------------------------------
 
+// ---- New-item check -----------------------------------------------------------
+// While a checklist is open on the watch, it is re-read every few seconds. Kept's realtime
+// socket only accepts browser sessions, not the API token, so this has to poll.
+
+var pollTimer = null;
+
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = null;
+}
+
+function schedulePoll() {
+  stopPolling();
+  var settings = loadSettings();
+  if (!openNote.id || !openNote.knownIds || settings.newItemAlert === false) return;
+  var seconds = Number(settings.pollSeconds) || DEFAULT_POLL_SECONDS;
+  pollTimer = setTimeout(pollOpenNote, Math.max(10, seconds) * 1000);
+}
+
+function pollOpenNote() {
+  pollTimer = null;
+  var noteId = openNote.id;
+  enqueue(function (finish) {
+    keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
+      finish();
+      if (openNote.id !== noteId) return;
+      // A change from the watch is queued; it resends the note itself if needed.
+      if (!working && note.isCbox && (kept.countNewItems(note, openNote.knownIds) ||
+          !kept.sameItems(kept.checklistItems(note), openNote.items))) {
+        showNote(noteId, note, -1);
+      } else {
+        schedulePoll();
+      }
+    }, function () {
+      finish();
+      schedulePoll();
+    });
+  });
+}
+
+function closeNote() {
+  stopPolling();
+  openNote = { id: 0, items: [], knownIds: null };
+}
+
 function listNotes() {
   var max = Math.min(Number(loadSettings().maxNotes) || kept.LIMITS.maxNotes, kept.LIMITS.maxNotes);
   var cards = [];
@@ -176,7 +223,10 @@ function runNext() {
 function openNoteById(noteId, selectIndex) {
   dropQueuedNoteMessages();
   // A reload of the same note keeps the old rows so ticks sent meanwhile still map.
-  if (openNote.id !== noteId) openNote = { id: noteId, items: [] };
+  if (openNote.id !== noteId) {
+    stopPolling();
+    openNote = { id: noteId, items: [], knownIds: null };
+  }
   enqueue(function (finish) {
     keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
       finish();
@@ -185,26 +235,41 @@ function openNoteById(noteId, selectIndex) {
         sendError(CMD.OPEN, 'This note is locked.', noteId);
         return;
       }
-      var flags = kept.noteFlags(note);
-      var title = kept.utf8Truncate(kept.htmlToText(note.noteTitle).replace(/\s+/g, ' '), kept.LIMITS.noteTitleBytes);
-      if (note.isCbox) {
-        openNote.items = kept.checklistItems(note);
-        send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: openNote.items.length });
-        openNote.items.forEach(function (item, index) {
-          send({ TYPE: TYPE.ITEM, NOTE_ID: noteId, INDEX: index, TEXT: item.text, DONE: item.done ? 1 : 0, INDENT: item.indent });
-        });
-      } else {
-        send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: 0 });
-        kept.bodyChunks(note).forEach(function (chunk) {
-          send({ TYPE: TYPE.BODY_CHUNK, NOTE_ID: noteId, TEXT: chunk });
-        });
-      }
-      send({ TYPE: TYPE.NOTE_END, NOTE_ID: noteId, INDEX: selectIndex >= 0 ? selectIndex : -1 });
+      showNote(noteId, note, selectIndex);
     }, function (message) {
       finish();
       sendError(CMD.OPEN, message, noteId);
     });
   });
+}
+
+// Sends a fetched note to the watch. When the same checklist was already shown, items with
+// text that were not there before are announced with the configured vibration.
+function showNote(noteId, note, selectIndex) {
+  dropQueuedNoteMessages();
+  var added = openNote.knownIds && note.isCbox ? kept.countNewItems(note, openNote.knownIds) : 0;
+  var flags = kept.noteFlags(note);
+  var title = kept.utf8Truncate(kept.htmlToText(note.noteTitle).replace(/\s+/g, ' '), kept.LIMITS.noteTitleBytes);
+  if (note.isCbox) {
+    openNote.items = kept.checklistItems(note);
+    send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: openNote.items.length });
+    openNote.items.forEach(function (item, index) {
+      send({ TYPE: TYPE.ITEM, NOTE_ID: noteId, INDEX: index, TEXT: item.text, DONE: item.done ? 1 : 0, INDENT: item.indent });
+    });
+  } else {
+    send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: 0 });
+    kept.bodyChunks(note).forEach(function (chunk) {
+      send({ TYPE: TYPE.BODY_CHUNK, NOTE_ID: noteId, TEXT: chunk });
+    });
+  }
+  send({ TYPE: TYPE.NOTE_END, NOTE_ID: noteId, INDEX: selectIndex >= 0 ? selectIndex : -1 });
+  var settings = loadSettings();
+  if (added) console.log('New items in note ' + noteId + ': ' + added);
+  if (added && settings.newItemAlert !== false) {
+    send({ TYPE: TYPE.NEW_ITEMS, NOTE_ID: noteId, COUNT: added, TEXT: kept.vibePattern(settings.newItemPattern) });
+  }
+  openNote.knownIds = note.isCbox ? kept.filledItemIds(note) : null;
+  schedulePoll();
 }
 
 // Reads the note, changes its checkBoxes with change(note), and saves them. change returns
@@ -271,6 +336,8 @@ function insertItem(noteId, afterIndex, text) {
     var result = kept.insertedCheckBoxes(note, after ? after.id : null, text, Date.now());
     if (!result) return null;
     position = result.index;
+    // Dictated on the watch, so not news to announce.
+    if (openNote.id === noteId && openNote.knownIds) openNote.knownIds[String(result.id)] = true;
     return result.checkBoxes;
   }, function () {
     openNoteById(noteId, position);
@@ -320,7 +387,7 @@ Pebble.addEventListener('ready', function () {
 Pebble.addEventListener('appmessage', function (e) {
   var msg = e.payload || {};
   switch (msg.CMD) {
-    case CMD.LIST: listNotes(); break;
+    case CMD.LIST: closeNote(); listNotes(); break;
     case CMD.OPEN: openNoteById(msg.NOTE_ID, -1); break;
     case CMD.TOGGLE: toggleItem(msg.NOTE_ID, msg.INDEX, !!msg.DONE); break;
     case CMD.CREATE: createNote(msg.TEXT); break;
@@ -343,8 +410,12 @@ Pebble.addEventListener('webviewclosed', function (e) {
     url: kept.normalizeBaseUrl(settingValue(values.KEPT_URL)),
     token: token || previous.token || '',
     maxNotes: Number(settingValue(values.MAX_NOTES)) || kept.LIMITS.maxNotes,
-    fontSize: Number(settingValue(values.FONT_SIZE))
+    fontSize: Number(settingValue(values.FONT_SIZE)),
+    newItemAlert: settingValue(values.NEW_ITEM_ALERT) !== false,
+    newItemPattern: kept.vibePattern(settingValue(values.NEW_ITEM_PATTERN)),
+    pollSeconds: Number(settingValue(values.POLL_SECONDS)) || DEFAULT_POLL_SECONDS
   });
+  schedulePoll();
   sendSettings();
   listNotes();
 });
