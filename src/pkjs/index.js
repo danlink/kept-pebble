@@ -17,7 +17,7 @@ var SETTINGS_KEY = 'kept-settings';
 var REQUEST_TIMEOUT_MS = 10000;
 var MAX_LIST_PAGES = 5;
 
-// Checklist items of the note currently open on the watch; the watch toggles by index.
+// Checklist rows of the note open on the watch, in the watch's order; the watch sends row indices.
 var openNote = { id: 0, items: [] };
 
 // ---- Settings ---------------------------------------------------------------
@@ -148,61 +148,110 @@ function listNotes() {
   fetchPage(null);
 }
 
-function openNoteById(noteId) {
-  dropQueuedNoteMessages();
-  openNote = { id: noteId, items: [] };
-  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
-    if (openNote.id !== noteId) return;
-    if (note.locked && note.lockedContentAvailable !== true) {
-      sendError(CMD.OPEN, 'This note is locked.', noteId);
-      return;
-    }
-    var flags = kept.noteFlags(note);
-    var title = kept.utf8Truncate(kept.htmlToText(note.noteTitle).replace(/\s+/g, ' '), kept.LIMITS.noteTitleBytes);
-    if (note.isCbox) {
-      openNote.items = kept.checklistItems(note);
-      send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: openNote.items.length });
-      openNote.items.forEach(function (item, index) {
-        send({ TYPE: TYPE.ITEM, NOTE_ID: noteId, INDEX: index, TEXT: item.text, DONE: item.done ? 1 : 0, INDENT: item.indent });
-      });
-    } else {
-      send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: 0 });
-      kept.bodyChunks(note).forEach(function (chunk) {
-        send({ TYPE: TYPE.BODY_CHUNK, NOTE_ID: noteId, TEXT: chunk });
-      });
-    }
-    send({ TYPE: TYPE.NOTE_END, NOTE_ID: noteId });
-  }, function (message) {
-    sendError(CMD.OPEN, message, noteId);
+// ---- Note commands ----------------------------------------------------------
+// Kept requests for the open note run one at a time, so two quick ticks cannot both read
+// the note and then overwrite each other's change.
+
+var work = [];
+var working = false;
+
+function enqueue(job) {
+  work.push(job);
+  if (!working) runNext();
+}
+
+function runNext() {
+  var job = work.shift();
+  working = !!job;
+  if (!job) return;
+  var finished = false;
+  job(function () {
+    if (finished) return;
+    finished = true;
+    runNext();
   });
 }
 
+// Sends the note to the watch. selectIndex is the checklist row to highlight afterwards, or -1.
+function openNoteById(noteId, selectIndex) {
+  dropQueuedNoteMessages();
+  // A reload of the same note keeps the old rows so ticks sent meanwhile still map.
+  if (openNote.id !== noteId) openNote = { id: noteId, items: [] };
+  enqueue(function (finish) {
+    keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
+      finish();
+      if (openNote.id !== noteId) return;
+      if (note.locked && note.lockedContentAvailable !== true) {
+        sendError(CMD.OPEN, 'This note is locked.', noteId);
+        return;
+      }
+      var flags = kept.noteFlags(note);
+      var title = kept.utf8Truncate(kept.htmlToText(note.noteTitle).replace(/\s+/g, ' '), kept.LIMITS.noteTitleBytes);
+      if (note.isCbox) {
+        openNote.items = kept.checklistItems(note);
+        send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: openNote.items.length });
+        openNote.items.forEach(function (item, index) {
+          send({ TYPE: TYPE.ITEM, NOTE_ID: noteId, INDEX: index, TEXT: item.text, DONE: item.done ? 1 : 0, INDENT: item.indent });
+        });
+      } else {
+        send({ TYPE: TYPE.NOTE_BEGIN, NOTE_ID: noteId, TITLE: title, FLAGS: flags, COUNT: 0 });
+        kept.bodyChunks(note).forEach(function (chunk) {
+          send({ TYPE: TYPE.BODY_CHUNK, NOTE_ID: noteId, TEXT: chunk });
+        });
+      }
+      send({ TYPE: TYPE.NOTE_END, NOTE_ID: noteId, INDEX: selectIndex >= 0 ? selectIndex : -1 });
+    }, function (message) {
+      finish();
+      sendError(CMD.OPEN, message, noteId);
+    });
+  });
+}
+
+// Reads the note, changes its checkBoxes with change(note), and saves them. change returns
+// the new checkBoxes, or null when the item it needs is gone. On failure the note is sent
+// to the watch again so the watch drops its optimistic change.
+function updateCheckBoxes(cmd, noteId, change, onSaved) {
+  enqueue(function (finish) {
+    function fail(message) {
+      finish();
+      sendError(cmd, message, noteId);
+      if (openNote.id === noteId) openNoteById(noteId, -1);
+    }
+    keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
+      var checkBoxes = change(note);
+      if (!checkBoxes) {
+        fail('This item was changed elsewhere.');
+        return;
+      }
+      keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes, isCbox: true }, function () {
+        finish();
+        onSaved(checkBoxes);
+      }, fail);
+    }, fail);
+  });
+}
+
+// The watch has already moved the item (and its sub-items) into the other block; this does
+// the same to openNote.items, so later row indices match, and then saves it to Kept.
 function toggleItem(noteId, index, done) {
   var item = openNote.id === noteId ? openNote.items[index] : null;
   if (!item) {
     sendError(CMD.TOGGLE, 'Reopen the note and try again.', noteId);
     return;
   }
-  // Re-read the note so edits made elsewhere since it was opened are not overwritten.
-  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
-    var checkBoxes = kept.toggledCheckBoxes(note, item.id, done);
-    if (!checkBoxes) {
-      sendError(CMD.TOGGLE, 'This item was changed elsewhere. Reopen the note.', noteId);
-      return;
-    }
-    keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes }, function () {
-      item.done = done;
-      send({ TYPE: TYPE.TOGGLED, NOTE_ID: noteId, INDEX: index, DONE: done ? 1 : 0 });
-    }, function (message) {
-      sendError(CMD.TOGGLE, message, noteId);
-    });
-  }, function (message) {
-    sendError(CMD.TOGGLE, message, noteId);
+  openNote.items = kept.toggledRows(openNote.items, index, done);
+  updateCheckBoxes(CMD.TOGGLE, noteId, function (note) {
+    return kept.toggledCheckBoxes(note, item.id, done);
+  }, function (checkBoxes) {
+    // If the note was also changed elsewhere, the watch's rows are now off: resend them.
+    if (working || openNote.id !== noteId) return;
+    var saved = kept.checklistItems({ checkBoxes: checkBoxes });
+    if (!kept.sameItems(saved, openNote.items)) openNoteById(noteId, -1);
   });
 }
 
-// Inserts a dictated checklist item below the item at afterIndex (-1 = top), then
-// resends the note so the watch's item indices match Kept again.
+// Inserts a dictated checklist item below the item at afterIndex (-1 = top), then resends
+// the note with the new item highlighted.
 function insertItem(noteId, afterIndex, text) {
   if (openNote.id !== noteId) {
     sendError(CMD.INSERT, 'Reopen the note and try again.', noteId);
@@ -217,19 +266,14 @@ function insertItem(noteId, afterIndex, text) {
     sendError(CMD.INSERT, 'Reopen the note and try again.', noteId);
     return;
   }
-  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
-    var checkBoxes = kept.insertedCheckBoxes(note, after ? after.id : null, text, Date.now());
-    if (!checkBoxes) {
-      sendError(CMD.INSERT, 'This item was changed elsewhere. Reopen the note.', noteId);
-      return;
-    }
-    keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes, isCbox: true }, function () {
-      openNoteById(noteId);
-    }, function (message) {
-      sendError(CMD.INSERT, message, noteId);
-    });
-  }, function (message) {
-    sendError(CMD.INSERT, message, noteId);
+  var position = -1;
+  updateCheckBoxes(CMD.INSERT, noteId, function (note) {
+    var result = kept.insertedCheckBoxes(note, after ? after.id : null, text, Date.now());
+    if (!result) return null;
+    position = result.index;
+    return result.checkBoxes;
+  }, function () {
+    openNoteById(noteId, position);
   });
 }
 
@@ -240,19 +284,10 @@ function deleteItem(noteId, index) {
     sendError(CMD.DELETE, 'Reopen the note and try again.', noteId);
     return;
   }
-  keptRequest('GET', '/api/notes/' + noteId, undefined, function (note) {
-    var checkBoxes = kept.removedCheckBoxes(note, item.id);
-    if (!checkBoxes) {
-      sendError(CMD.DELETE, 'This item was changed elsewhere. Reopen the note.', noteId);
-      return;
-    }
-    keptRequest('PATCH', '/api/notes/' + noteId, { checkBoxes: checkBoxes }, function () {
-      openNoteById(noteId);
-    }, function (message) {
-      sendError(CMD.DELETE, message, noteId);
-    });
-  }, function (message) {
-    sendError(CMD.DELETE, message, noteId);
+  updateCheckBoxes(CMD.DELETE, noteId, function (note) {
+    return kept.removedCheckBoxes(note, item.id);
+  }, function () {
+    openNoteById(noteId, -1);
   });
 }
 
@@ -286,7 +321,7 @@ Pebble.addEventListener('appmessage', function (e) {
   var msg = e.payload || {};
   switch (msg.CMD) {
     case CMD.LIST: listNotes(); break;
-    case CMD.OPEN: openNoteById(msg.NOTE_ID); break;
+    case CMD.OPEN: openNoteById(msg.NOTE_ID, -1); break;
     case CMD.TOGGLE: toggleItem(msg.NOTE_ID, msg.INDEX, !!msg.DONE); break;
     case CMD.CREATE: createNote(msg.TEXT); break;
     case CMD.INSERT: insertItem(msg.NOTE_ID, msg.INDEX, msg.TEXT); break;

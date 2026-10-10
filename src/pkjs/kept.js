@@ -164,15 +164,71 @@ function selectNotes(cards, max) {
   return active.slice(0, max).map(function (entry) { return noteRow(entry.note); });
 }
 
+function indentLevel(item) {
+  return Math.max(0, Math.min(3, Number(item.indentLevel) || 0));
+}
+
+function copyOf(item) {
+  var copy = {};
+  for (var key in item) if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key];
+  return copy;
+}
+
+// The checklist as the watch shows it: open items, then checked items, each in stored
+// order. Every write from the watch stores the checklist in this order too. indent is
+// Kept's stored level; the watch caps it per block for display, as Kept does.
+function displayRows(note) {
+  var boxes = note.checkBoxes || [];
+  var ordered = boxes.filter(function (item) { return !item.done; })
+    .concat(boxes.filter(function (item) { return item.done; }));
+  return ordered.map(function (item) {
+    return { id: item.id, done: !!item.done, indent: indentLevel(item), box: item };
+  });
+}
+
+function storedBoxes(rows) {
+  return rows.map(function (row) {
+    var copy = copyOf(row.box);
+    copy.done = row.done;
+    return copy;
+  });
+}
+
 function checklistItems(note) {
-  return (note.checkBoxes || []).slice(0, LIMITS.maxItems).map(function (item) {
+  return displayRows(note).slice(0, LIMITS.maxItems).map(function (row) {
     return {
-      id: item.id,
-      text: utf8Truncate(oneLine(htmlToText(item.data)) || ' ', LIMITS.itemBytes),
-      done: !!item.done,
-      indent: Math.max(0, Math.min(3, Number(item.indentLevel) || 0))
+      id: row.id,
+      text: utf8Truncate(oneLine(htmlToText(row.box.data)) || ' ', LIMITS.itemBytes),
+      done: row.done,
+      indent: row.indent
     };
   });
+}
+
+// Sets the row at index, and the rows nested below it in the same block, to done and moves
+// them to the top of the checked block. That is also the end of the open block, where
+// unchecked rows go. Rows need done and indent. Mirrored by checklist_toggle in src/c/main.c.
+function toggledRows(rows, index, done) {
+  var first = rows[index];
+  var end = index + 1;
+  while (end < rows.length && rows[end].done === first.done && rows[end].indent > first.indent) end++;
+  var group = rows.slice(index, end).map(function (row) {
+    var copy = copyOf(row);
+    copy.done = done;
+    return copy;
+  });
+  var rest = rows.slice(0, index).concat(rows.slice(end));
+  var at = 0;
+  while (at < rest.length && !rest[at].done) at++;
+  return rest.slice(0, at).concat(group, rest.slice(at));
+}
+
+function sameItems(a, b) {
+  if (a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (String(a[i].id) !== String(b[i].id) || a[i].done !== b[i].done || a[i].indent !== b[i].indent) return false;
+  }
+  return true;
 }
 
 function bodyChunks(note) {
@@ -181,51 +237,51 @@ function bodyChunks(note) {
   return utf8Chunks(utf8Truncate(text, LIMITS.bodyBytes), LIMITS.chunkBytes);
 }
 
-// Returns the checkBoxes array with one item flipped, or null if it no longer exists.
+function rowIndex(rows, itemId) {
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].id) === String(itemId)) return i;
+  return -1;
+}
+
+// Returns the checkBoxes array after toggledRows, or null if the item no longer exists.
 function toggledCheckBoxes(note, itemId, done) {
-  var found = false;
-  var next = (note.checkBoxes || []).map(function (item) {
-    if (String(item.id) !== String(itemId)) return item;
-    found = true;
-    var copy = {};
-    for (var key in item) if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key];
-    copy.done = done;
-    return copy;
-  });
-  return found ? next : null;
+  var rows = displayRows(note);
+  var index = rowIndex(rows, itemId);
+  return index < 0 ? null : storedBoxes(toggledRows(rows, index, done));
 }
 
 // Returns the checkBoxes array without the item with itemId, or null if it no longer exists.
 function removedCheckBoxes(note, itemId) {
-  var boxes = note.checkBoxes || [];
-  var next = boxes.filter(function (item) { return String(item.id) !== String(itemId); });
-  return next.length === boxes.length ? null : next;
+  var rows = displayRows(note);
+  var index = rowIndex(rows, itemId);
+  if (index < 0) return null;
+  rows.splice(index, 1);
+  return storedBoxes(rows);
 }
 
-// Returns the checkBoxes array with a new unchecked item inserted directly after the
-// item with afterId (or at the top when afterId is null), or null if afterId is gone.
-// The new item copies the indent of the item it follows.
+// Inserts a new open item directly after the item with afterId (at the top when afterId is
+// null) and copies its indent. After a checked item it goes to the end of the open block
+// instead. Returns { checkBoxes, index } with the new item's row, or null if afterId is gone.
 function insertedCheckBoxes(note, afterId, text, now) {
-  var boxes = (note.checkBoxes || []).slice();
+  var rows = displayRows(note);
   var position = 0;
   var indent = 0;
   if (afterId !== null && afterId !== undefined) {
-    position = -1;
-    for (var i = 0; i < boxes.length; i++) {
-      if (String(boxes[i].id) === String(afterId)) {
-        position = i + 1;
-        indent = Number(boxes[i].indentLevel) || 0;
-        break;
-      }
+    var after = rowIndex(rows, afterId);
+    if (after < 0) return null;
+    if (rows[after].done) {
+      while (position < rows.length && !rows[position].done) position++;
+    } else {
+      position = after + 1;
+      indent = Number(rows[after].box.indentLevel) || 0;
     }
-    if (position < 0) return null;
   }
   var id = now;
   var taken = {};
-  boxes.forEach(function (item) { taken[String(item.id)] = true; });
+  rows.forEach(function (row) { taken[String(row.id)] = true; });
   while (taken[String(id)]) id++;
-  boxes.splice(position, 0, { id: id, data: escapeHtml(oneLine(text)), done: false, indentLevel: indent });
-  return boxes;
+  var box = { id: id, data: escapeHtml(oneLine(text)), done: false, indentLevel: indent };
+  rows.splice(position, 0, { id: id, done: false, indent: indent, box: box });
+  return { checkBoxes: storedBoxes(rows), index: position };
 }
 
 function escapeHtml(text) {
@@ -272,6 +328,8 @@ module.exports = {
   noteRow: noteRow,
   selectNotes: selectNotes,
   checklistItems: checklistItems,
+  toggledRows: toggledRows,
+  sameItems: sameItems,
   bodyChunks: bodyChunks,
   toggledCheckBoxes: toggledCheckBoxes,
   insertedCheckBoxes: insertedCheckBoxes,

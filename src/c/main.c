@@ -20,7 +20,9 @@ typedef enum { CMD_NONE = 0, CMD_LIST, CMD_OPEN, CMD_TOGGLE, CMD_CREATE, CMD_INS
 
 #define H_INSET PBL_IF_ROUND_ELSE(22, 4)
 #define HIGHLIGHT_BG PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack)
-#define DONE_TEXT PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
+// Checked items form an inverted block below the open ones.
+#define DONE_BG   GColorBlack
+#define DONE_TEXT PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite)
 
 #define PERSIST_FONT_SIZE 1
 #define FONT_SIZE_COUNT   3
@@ -35,8 +37,8 @@ typedef struct {
 typedef struct {
   char text[80];
   bool done;
-  bool pending;
-  uint8_t indent;
+  uint8_t indent;  // Kept's stored level, 0-3
+  uint8_t shown_indent;  // indent capped per block for display, see checklist_update_indents
 } ChecklistItem;
 
 // ---- State ------------------------------------------------------------------
@@ -250,6 +252,16 @@ static void text_window_unload(Window *window) {
 
 // ---- Checklist window ---------------------------------------------------------
 
+// Caps each row at one level deeper than the row above, starting at 0 in each block
+// (open, then checked), like Kept's normalizeIndentLevels.
+static void checklist_update_indents(void) {
+  for (int i = 0; i < s_item_count; i++) {
+    bool block_start = i == 0 || s_items[i].done != s_items[i - 1].done;
+    uint8_t max = block_start ? 0 : s_items[i - 1].shown_indent + 1;
+    s_items[i].shown_indent = s_items[i].indent < max ? s_items[i].indent : max;
+  }
+}
+
 static bool checklist_has_items(void) {
   return !s_note_loading && !s_note_status[0] && s_item_count > 0;
 }
@@ -262,7 +274,7 @@ static uint16_t checklist_num_rows(MenuLayer *menu, uint16_t section, void *data
 #define CHECKLIST_ROW_PAD 6
 
 static int16_t checklist_text_x(const ChecklistItem *item) {
-  return H_INSET + 2 + item->indent * 12 + CHECKBOX_SIZE + 6;
+  return H_INSET + 2 + item->shown_indent * 12 + CHECKBOX_SIZE + 6;
 }
 
 // Height of the item's text box: one line, or two when it wraps (longer text is ellipsized).
@@ -310,13 +322,32 @@ static void checklist_draw_row(GContext *ctx, const Layer *cell, MenuIndex *inde
   }
 
   ChecklistItem *item = &s_items[index->row];
-  int16_t x = H_INSET + 2 + item->indent * 12;
+  GColor bg = highlighted ? HIGHLIGHT_BG : GColorWhite;
+  GColor text_color = fg;
+  if (item->done) {
+    if (!highlighted) {
+      bg = DONE_BG;
+      fg = GColorWhite;
+      text_color = DONE_TEXT;
+    }
+#if !defined(PBL_COLOR)
+    else {
+      // The normal black highlight would vanish in the black block, so invert it there.
+      bg = GColorWhite;
+      fg = text_color = GColorBlack;
+    }
+#endif
+    graphics_context_set_fill_color(ctx, bg);
+    graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+  }
+
+  int16_t x = H_INSET + 2 + item->shown_indent * 12;
   GRect box = GRect(x, (bounds.size.h - CHECKBOX_SIZE) / 2, CHECKBOX_SIZE, CHECKBOX_SIZE);
   graphics_context_set_stroke_color(ctx, fg);
   graphics_context_set_fill_color(ctx, fg);
   if (item->done) {
     graphics_fill_rect(ctx, box, 2, GCornersAll);
-    graphics_context_set_stroke_color(ctx, highlighted ? HIGHLIGHT_BG : GColorWhite);
+    graphics_context_set_stroke_color(ctx, bg);
     graphics_context_set_stroke_width(ctx, 2);
     graphics_draw_line(ctx, GPoint(x + 3, box.origin.y + 7), GPoint(x + 6, box.origin.y + 10));
     graphics_draw_line(ctx, GPoint(x + 6, box.origin.y + 10), GPoint(x + 11, box.origin.y + 3));
@@ -330,24 +361,57 @@ static void checklist_draw_row(GContext *ctx, const Layer *cell, MenuIndex *inde
   int16_t visible = text_h - checklist_text_nudge();
   GRect text_box = GRect(text_x, (bounds.size.h - visible) / 2 - checklist_text_nudge(),
                          bounds.size.w - text_x - H_INSET, text_h);
-  graphics_context_set_text_color(ctx, highlighted ? GColorWhite : (item->done ? DONE_TEXT : GColorBlack));
+  graphics_context_set_text_color(ctx, text_color);
   graphics_draw_text(ctx, item->text, note_body_font(), text_box, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 #if defined(PBL_COLOR)
   if (!highlighted) {
-    graphics_context_set_stroke_color(ctx, GColorLightGray);
+    graphics_context_set_stroke_color(ctx, item->done ? GColorDarkGray : GColorLightGray);
     graphics_draw_line(ctx, GPoint(x, bounds.size.h - 1), GPoint(bounds.size.w - H_INSET, bounds.size.h - 1));
   }
 #endif
 }
 
+// Reverses s_items[from..to).
+static void checklist_reverse(int from, int to) {
+  for (to--; from < to; from++, to--) {
+    ChecklistItem tmp = s_items[from];
+    s_items[from] = s_items[to];
+    s_items[to] = tmp;
+  }
+}
+
+
+// Mirrors toggledRows in src/pkjs/kept.js: sets the row and the rows nested below it to done
+// and moves them to the top of the checked block, which is also the end of the open block.
+static void checklist_toggle(int row, bool done) {
+  bool was_done = s_items[row].done;
+  uint8_t indent = s_items[row].indent;
+  int end = row + 1;
+  while (end < s_item_count && s_items[end].done == was_done && s_items[end].indent > indent) end++;
+  for (int i = row; i < end; i++) s_items[i].done = done;
+
+  // The first checked row outside the group: the group goes right before it.
+  int at = 0;
+  while (at < s_item_count && ((at >= row && at < end) || !s_items[at].done)) at++;
+  // Rotate the group into place with three reversals (no buffer needed).
+  if (at > end) {
+    checklist_reverse(row, end);
+    checklist_reverse(end, at);
+    checklist_reverse(row, at);
+  } else if (at < row) {
+    checklist_reverse(at, row);
+    checklist_reverse(row, end);
+    checklist_reverse(at, end);
+  }
+  checklist_update_indents();
+}
+
 static void checklist_select(MenuLayer *menu, MenuIndex *index, void *data) {
   if (!checklist_has_items()) return;
-  ChecklistItem *item = &s_items[index->row];
-  if (item->pending) return;
-  bool done = !item->done;
+  bool done = !s_items[index->row].done;
   if (!send_command(CMD_TOGGLE, s_open_id, index->row, done, NULL)) return;
-  item->done = done;
-  item->pending = true;
+  // The highlight stays on this row, which now shows the next item.
+  checklist_toggle(index->row, done);
   vibes_short_pulse();
   menu_layer_reload_data(menu);
 }
@@ -609,18 +673,7 @@ static void handle_error(DictionaryIterator *iter) {
       note_view_update();
       return;
     case CMD_TOGGLE:
-      if (note_id == s_open_id) {
-        // Roll back optimistic toggles that the phone could not save.
-        for (int i = 0; i < s_item_count; i++) {
-          if (s_items[i].pending) {
-            s_items[i].pending = false;
-            s_items[i].done = !s_items[i].done;
-          }
-        }
-        note_view_update();
-      }
-      toast(text);
-      return;
+      // The phone resends the note, which undoes the toggle shown on the watch.
     case CMD_CREATE:
       toast(text);
       return;
@@ -701,13 +754,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       snprintf(s_items[index].text, sizeof(s_items[index].text), "%s", tuple_str(iter, MESSAGE_KEY_TEXT));
       s_items[index].done = tuple_int(iter, MESSAGE_KEY_DONE) != 0;
       s_items[index].indent = tuple_int(iter, MESSAGE_KEY_INDENT);
-      s_items[index].pending = false;
       if (index >= s_item_count) s_item_count = index + 1;
       break;
     case TYPE_NOTE_END:
       if (note_id != s_open_id) return;
       s_note_loading = false;
+      checklist_update_indents();
       note_view_update();
+      // The phone knows where an inserted item ended up; it may have moved to the open block.
+      if (s_select_after_load >= 0 && index >= 0) s_select_after_load = index;
       if (s_select_after_load >= 0 && s_checklist_menu && s_item_count > 0) {
         // After a delete the row index may now be past the end; keep the highlight on the last item then.
         int row = s_select_after_load < s_item_count ? s_select_after_load : s_item_count - 1;
@@ -717,12 +772,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       s_select_after_load = -1;
       break;
 
-    case TYPE_TOGGLED:
-      if (note_id != s_open_id || index < 0 || index >= s_item_count) return;
-      s_items[index].done = tuple_int(iter, MESSAGE_KEY_DONE) != 0;
-      s_items[index].pending = false;
-      note_view_update();
-      break;
     case TYPE_SETTINGS: {
       int32_t size = tuple_int(iter, MESSAGE_KEY_FONT_SIZE);
       if (size >= 0 && size < FONT_SIZE_COUNT && size != s_font_size) {
@@ -739,6 +788,8 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     case TYPE_ERROR:
       handle_error(iter);
       break;
+    case TYPE_TOGGLED:
+      break;  // no longer sent; the watch applies toggles itself
   }
 }
 
