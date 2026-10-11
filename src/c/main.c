@@ -509,6 +509,28 @@ static void checklist_long_select(MenuLayer *menu, MenuIndex *index, void *data)
   });
 }
 
+#if defined(PBL_TOUCH)
+// Touch in a checklist only scrolls: the system bridge would turn a tap into Select and tick the
+// row, so the window opts out of it and drives the selection from its own recognizers instead.
+#define CHECKLIST_PAN_STEP 24  // finger travel in px per row moved
+static int16_t s_pan_carry;
+
+static void checklist_pan(const Recognizer *recognizer, RecognizerEvent event) {
+  if (event == RecognizerEvent_Started) s_pan_carry = 0;
+  if (event != RecognizerEvent_Updated || !s_checklist_menu) return;
+  s_pan_carry += pan_recognizer_get_delta_since_prev(recognizer).y;
+  // Dragging the finger up pulls the content up, i.e. moves the selection down.
+  while (s_pan_carry <= -CHECKLIST_PAN_STEP) {
+    s_pan_carry += CHECKLIST_PAN_STEP;
+    menu_layer_set_selected_next(s_checklist_menu, false, MenuRowAlignCenter, true);
+  }
+  while (s_pan_carry >= CHECKLIST_PAN_STEP) {
+    s_pan_carry -= CHECKLIST_PAN_STEP;
+    menu_layer_set_selected_next(s_checklist_menu, true, MenuRowAlignCenter, true);
+  }
+}
+#endif
+
 static void checklist_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   s_checklist_menu = menu_layer_create(layer_get_bounds(root));
@@ -524,6 +546,12 @@ static void checklist_window_load(Window *window) {
   });
   menu_layer_set_click_config_onto_window(s_checklist_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_checklist_menu));
+
+#if defined(PBL_TOUCH)
+  // The window owns the recognizer and destroys them on unload.
+  window_set_touch_bridge_disabled(window, true);
+  window_attach_recognizer(window, pan_recognizer_create(checklist_pan, NULL, PanAxis_Vertical));
+#endif
 }
 
 static void checklist_window_unload(Window *window) {
@@ -859,8 +887,9 @@ static void init(void) {
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(app_message_inbox_size_maximum(), 1024);
 
-  // Opt in to the system touch bridge so swipes/taps scroll the notes list, checklists and
-  // text notes on touchscreen watches. A no-op macro on platforms without touch.
+  // Opt in to the system touch bridge so swipes/taps scroll the notes list and text notes on
+  // touchscreen watches; checklists handle touch themselves (scroll only, see checklist_pan).
+  // A no-op macro on platforms without touch.
   (void)app_touch_navigation_enable(true);
 
   window_stack_push(s_list_window, true);
