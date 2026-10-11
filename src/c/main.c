@@ -437,8 +437,37 @@ static void checklist_toggle(int row, bool done) {
   checklist_update_indents();
 }
 
+#if defined(PBL_TOUCH)
+// A tap on a checklist row still reaches Select (MenuLayer handles touch itself), so Select is
+// ignored while a finger is down and shortly after it lifts: touch may only scroll here.
+#define TOUCH_SELECT_GUARD_MS 400
+static bool s_touch_down;
+static int64_t s_touch_up_ms;
+
+static int64_t now_ms(void) {
+  time_t s;
+  uint16_t ms;
+  time_ms(&s, &ms);
+  return (int64_t)s * 1000 + ms;
+}
+
+static void checklist_touch(const TouchEvent *event, void *context) {
+  if (event->type == TouchEvent_Touchdown) s_touch_down = true;
+  if (event->type == TouchEvent_Liftoff) {
+    s_touch_down = false;
+    s_touch_up_ms = now_ms();
+  }
+}
+
+static bool select_from_touch(void) {
+  return s_touch_down || now_ms() - s_touch_up_ms < TOUCH_SELECT_GUARD_MS;
+}
+#else
+static bool select_from_touch(void) { return false; }
+#endif
+
 static void checklist_select(MenuLayer *menu, MenuIndex *index, void *data) {
-  if (!checklist_has_items()) return;
+  if (!checklist_has_items() || select_from_touch()) return;
   bool done = !s_items[index->row].done;
   if (!send_command(CMD_TOGGLE, s_open_id, index->row, done, NULL)) return;
   // The highlight stays on this row, which now shows the next item.
@@ -482,7 +511,7 @@ static void item_action_menu_closed(ActionMenu *menu, const ActionMenuItem *perf
 }
 
 static void checklist_long_select(MenuLayer *menu, MenuIndex *index, void *data) {
-  if (s_note_loading || s_note_status[0]) return;
+  if (s_note_loading || s_note_status[0] || select_from_touch()) return;
   bool has_item = s_item_count > 0;
 #if !defined(PBL_MICROPHONE)
   if (!has_item) {
@@ -548,13 +577,18 @@ static void checklist_window_load(Window *window) {
   layer_add_child(root, menu_layer_get_layer(s_checklist_menu));
 
 #if defined(PBL_TOUCH)
-  // The window owns the recognizer and destroys them on unload.
+  // The window owns the recognizer and destroys it on unload.
   window_set_touch_bridge_disabled(window, true);
   window_attach_recognizer(window, pan_recognizer_create(checklist_pan, NULL, PanAxis_Vertical));
+  s_touch_down = false;
+  touch_service_subscribe(checklist_touch, NULL);
 #endif
 }
 
 static void checklist_window_unload(Window *window) {
+#if defined(PBL_TOUCH)
+  touch_service_unsubscribe();
+#endif
   menu_layer_destroy(s_checklist_menu);
   s_checklist_menu = NULL;
   s_open_id = 0;
